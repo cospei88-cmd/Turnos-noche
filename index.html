@@ -1,0 +1,760 @@
+html
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Turnos Nocturnos 2-4 | Santos, Guerrero y Sergio</title>
+  <meta name="theme-color" content="#090d16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Turnos 2-4" />
+  <!-- Tailwind CSS y cliente oficial de Supabase -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #090d16; color: #f1f5f9; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen pb-24 md:pb-10 selection:bg-blue-500 selection:text-white">
+  <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md pointer-events-none"></div>
+  <div id="app"></div>
+
+  <script>
+    // ============================================================================
+    // 1. CONFIGURACIÓN DEL CICLO 2-4 (REFERENCIA: 16 OCTUBRE 2026)
+    // ============================================================================
+    const REFERENCE_UTC_MS = Date.UTC(2026, 9, 16, 12, 0, 0); // 16 Oct 2026 12:00 UTC
+    const MS_PER_DAY = 86400000;
+    const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const WEEKDAYS_SHORT = ['L','M','X','J','V','S','D'];
+
+    const COLOR_THEMES = {
+      blue:   { name: 'Azul',     bg: 'bg-blue-600',    soft: 'bg-blue-500/15',    border: 'border-blue-500/40',    badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',    dot: 'bg-blue-500' },
+      green:  { name: 'Verde',    bg: 'bg-emerald-600', soft: 'bg-emerald-500/15', border: 'border-emerald-500/40', badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40', dot: 'bg-emerald-500' },
+      orange: { name: 'Naranja',  bg: 'bg-amber-500',   soft: 'bg-amber-500/15',   border: 'border-amber-500/40',   badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',   dot: 'bg-amber-500' },
+      purple: { name: 'Violeta',  bg: 'bg-purple-600',  soft: 'bg-purple-500/15',  border: 'border-purple-500/40',  badge: 'bg-purple-500/20 text-purple-300 border-purple-500/40',  dot: 'bg-purple-500' },
+      rose:   { name: 'Coral',    bg: 'bg-rose-600',    soft: 'bg-rose-500/15',    border: 'border-rose-500/40',    badge: 'bg-rose-500/20 text-rose-300 border-rose-500/40',    dot: 'bg-rose-500' }
+    };
+
+    const DEFAULT_PROFILES = {
+      user1: { id: 'user1', name: 'Santos',   color: 'blue',   cycleOffset: 0, canApproveVacations: true,  canEditOverrides: true },
+      user2: { id: 'user2', name: 'Guerrero', color: 'green',  cycleOffset: 0, canApproveVacations: false, canEditOverrides: true },
+      user3: { id: 'user3', name: 'Sergio',   color: 'orange', cycleOffset: 0, canApproveVacations: false, canEditOverrides: true }
+    };
+
+    // Estado global de la aplicación
+    let state = {
+      activeUser: 'user1',
+      activeTab: 'calendario', // calendario | anual | vacaciones | cambios | ajustes | supabase
+      currentYear: 2026,
+      currentMonth: 9, // Octubre
+      selectedDate: '2026-10-16',
+      filterWorker: 'all',
+      profiles: JSON.parse(JSON.stringify(DEFAULT_PROFILES)),
+      vacations: [],
+      overrides: [],
+      // Formulario Vacaciones
+      vacStart: '2026-10-22',
+      vacEnd: '2026-10-25',
+      vacType: 'vacaciones',
+      vacComment: '',
+      // Formulario Cambios
+      ovrDate: '2026-10-16',
+      ovrUser: 'user1',
+      ovrMode: 'puntual',
+      ovrTarget: 'libre',
+      ovrSwapPartner: 'user2',
+      ovrNote: '',
+      // Credenciales Supabase (guardadas en navegador para comodidad)
+      sbUrl: '',
+      sbKey: '',
+      sbConnected: false
+    };
+
+    // Intentar recuperar configuración de Supabase si se guardó antes
+    try {
+      state.sbUrl = localStorage.getItem('turnos_sb_url') || '';
+      state.sbKey = localStorage.getItem('turnos_sb_key') || '';
+      const savedLocal = localStorage.getItem('turnos_backup_state');
+      if (savedLocal) {
+        const parsed = JSON.parse(savedLocal);
+        if (parsed.profiles) state.profiles = parsed.profiles;
+        if (parsed.vacations) state.vacations = parsed.vacations;
+        if (parsed.overrides) state.overrides = parsed.overrides;
+      }
+    } catch (e) {}
+
+    let supabaseClient = null;
+
+    function parseDateUTC(dateStr) {
+      const [y, m, d] = dateStr.split('-').map(Number);
+      return Date.UTC(y, m - 1, d, 12, 0, 0);
+    }
+
+    function formatDateStr(y, mZero, d) {
+      return `${y}-${String(mZero + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+
+    function formatHumanDate(dateStr) {
+      if (!dateStr) return '';
+      const [y, m, d] = dateStr.split('-').map(Number);
+      const shortM = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+      return `${d} ${shortM[m - 1]} ${y}`;
+    }
+
+    function isBaseWorkNight(dateStr, cycleOffset = 0) {
+      const targetMs = parseDateUTC(dateStr);
+      const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
+      const cycleIndex = ((diffDays % 6) + 6) % 6;
+      return cycleIndex === 0 || cycleIndex === 1;
+    }
+
+    function getCycleDayNumber(dateStr, cycleOffset = 0) {
+      const targetMs = parseDateUTC(dateStr);
+      const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
+      return (((diffDays % 6) + 6) % 6) + 1;
+    }
+
+    function getDatesInRange(startStr, endStr) {
+      const s = parseDateUTC(startStr);
+      const e = parseDateUTC(endStr);
+      if (e < s) return [];
+      const arr = [];
+      for (let ms = s; ms <= e; ms += MS_PER_DAY) {
+        const dt = new Date(ms);
+        arr.push(formatDateStr(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+      }
+      return arr;
+    }
+
+    function getWorkerDayStatus(userId, dateStr) {
+      const profile = state.profiles[userId] || DEFAULT_PROFILES[userId];
+      const baseWorking = isBaseWorkNight(dateStr, profile.cycleOffset || 0);
+      const cycleDay = getCycleDayNumber(dateStr, profile.cycleOffset || 0);
+      const override = state.overrides.find(o => o.date === dateStr && o.userId === userId);
+      const userVacs = state.vacations.filter(v => v.userId === userId && dateStr >= v.startDate && dateStr <= v.endDate && v.status !== 'rechazada');
+      const approvedVacation = userVacs.find(v => v.status === 'aprobada');
+      const pendingVacation = userVacs.find(v => v.status === 'pendiente');
+
+      let effectiveWorking = baseWorking;
+      if (override) effectiveWorking = override.targetType === 'trabaja';
+      if (approvedVacation) effectiveWorking = false;
+
+      return { userId, baseWorking, effectiveWorking, cycleDay, override, approvedVacation, pendingVacation };
+    }
+
+    function saveLocalBackup() {
+      try {
+        localStorage.setItem('turnos_backup_state', JSON.stringify({
+          profiles: state.profiles,
+          vacations: state.vacations,
+          overrides: state.overrides
+        }));
+      } catch (e) {}
+    }
+
+    function showToast(msg, type = 'success') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+      const colors = type === 'warning' ? 'border-amber-500 bg-amber-950/95 text-amber-200' : 'border-emerald-500 bg-slate-900/95 text-emerald-300';
+      container.innerHTML = `<div class="px-4 py-3 rounded-xl border shadow-2xl text-xs sm:text-sm font-semibold ${colors} transition-all">${msg}</div>`;
+      setTimeout(() => { container.innerHTML = ''; }, 3500);
+    }
+
+    async function initSupabase() {
+      if (!state.sbUrl || !state.sbKey || !window.supabase) {
+        state.sbConnected = false;
+        render();
+        return;
+      }
+      try {
+        supabaseClient = window.supabase.createClient(state.sbUrl, state.sbKey);
+        await fetchAllFromSupabase();
+        supabaseClient.channel('turnos-realtime')
+          .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+            fetchAllFromSupabase();
+          })
+          .subscribe();
+        state.sbConnected = true;
+        render();
+      } catch (err) {
+        console.error(err);
+        state.sbConnected = false;
+        render();
+      }
+    }
+
+    async function fetchAllFromSupabase() {
+      if (!supabaseClient) return;
+      const { data: profs } = await supabaseClient.from('profiles').select('*');
+      if (profs && profs.length > 0) {
+        profs.forEach(p => {
+          state.profiles[p.id] = {
+            id: p.id,
+            name: p.name,
+            color: p.color || 'blue',
+            cycleOffset: Number(p.cycle_offset || 0),
+            canApproveVacations: Boolean(p.can_approve_vacations),
+            canEditOverrides: Boolean(p.can_edit_overrides)
+          };
+        });
+      }
+      const { data: vacs } = await supabaseClient.from('vacations').select('*').order('created_at', { ascending: false });
+      if (vacs) {
+        state.vacations = vacs.map(v => ({
+          id: v.id,
+          userId: v.user_id,
+          startDate: v.start_date,
+          endDate: v.end_date,
+          type: v.type,
+          comment: v.comment || '',
+          status: v.status,
+          workNightsAffected: v.work_nights_affected || 0,
+          reviewedBy: v.reviewed_by
+        }));
+      }
+      const { data: ovrs } = await supabaseClient.from('shift_overrides').select('*').order('date', { ascending: false });
+      if (ovrs) {
+        state.overrides = ovrs.map(o => ({
+          id: o.id,
+          date: o.date,
+          userId: o.user_id,
+          targetType: o.target_type,
+          note: o.note || '',
+          createdBy: o.created_by,
+          createdAt: o.created_at
+        }));
+      }
+      saveLocalBackup();
+      render();
+    }
+
+    window.setTab = (t) => { state.activeTab = t; render(); };
+    window.setActiveUser = (u) => { state.activeUser = u; state.ovrUser = u; render(); };
+    window.setFilterWorker = (w) => { state.filterWorker = w; render(); };
+    window.selectDate = (dStr) => { state.selectedDate = dStr; state.ovrDate = dStr; render(); };
+
+    window.changeMonth = (delta) => {
+      state.currentMonth += delta;
+      if (state.currentMonth < 0) { state.currentMonth = 11; state.currentYear--; }
+      if (state.currentMonth > 11) { state.currentMonth = 0; state.currentYear++; }
+      render();
+    };
+
+    window.changeYear = (delta) => {
+      state.currentYear += delta;
+      render();
+    };
+
+    window.goToDate = (mode) => {
+      if (mode === 'ref') {
+        state.currentYear = 2026; state.currentMonth = 9; state.selectedDate = '2026-10-16';
+      } else {
+        const now = new Date();
+        state.currentYear = now.getFullYear();
+        state.currentMonth = now.getMonth();
+        state.selectedDate = formatDateStr(now.getFullYear(), now.getMonth(), now.getDate());
+      }
+      render();
+    };
+
+    window.submitVacation = async (e) => {
+      e.preventDefault();
+      const s = document.getElementById('vac-start').value;
+      const end = document.getElementById('vac-end').value;
+      const type = document.getElementById('vac-type').value;
+      const comment = document.getElementById('vac-comment').value.trim();
+
+      if (parseDateUTC(end) < parseDateUTC(s)) {
+        showToast('La fecha de fin no puede ser anterior al inicio', 'warning');
+        return;
+      }
+
+      const days = getDatesInRange(s, end);
+      let affected = 0;
+      days.forEach(d => { if (getWorkerDayStatus(state.activeUser, d).baseWorking) affected++; });
+
+      const newVac = {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        userId: state.activeUser,
+        startDate: s,
+        endDate: end,
+        type,
+        comment,
+        status: 'pendiente',
+        workNightsAffected: affected
+      };
+
+      if (supabaseClient && state.sbConnected) {
+        await supabaseClient.from('vacations').insert({
+          user_id: newVac.userId,
+          start_date: newVac.startDate,
+          end_date: newVac.endDate,
+          type: newVac.type,
+          comment: newVac.comment,
+          status: 'pendiente',
+          work_nights_affected: affected
+        });
+        await fetchAllFromSupabase();
+      } else {
+        state.vacations.unshift(newVac);
+        saveLocalBackup();
+        render();
+      }
+      showToast('Solicitud de permiso registrada correctamente');
+    };
+
+    window.reviewVacation = async (id, status) => {
+      if (!state.profiles[state.activeUser].canApproveVacations) {
+        showToast('Tu usuario no tiene permisos para aprobar vacaciones', 'warning');
+        return;
+      }
+      if (supabaseClient && state.sbConnected) {
+        await supabaseClient.from('vacations').update({ status, reviewed_by: state.activeUser }).eq('id', id);
+        await fetchAllFromSupabase();
+      } else {
+        state.vacations = state.vacations.map(v => v.id === id ? { ...v, status, reviewedBy: state.activeUser } : v);
+        saveLocalBackup();
+        render();
+      }
+      showToast(`Solicitud ${status}`);
+    };
+
+    window.deleteVacation = async (id) => {
+      if (supabaseClient && state.sbConnected) {
+        await supabaseClient.from('vacations').delete().eq('id', id);
+        await fetchAllFromSupabase();
+      } else {
+        state.vacations = state.vacations.filter(v => v.id !== id);
+        saveLocalBackup();
+        render();
+      }
+      showToast('Solicitud eliminada');
+    };
+
+    window.submitOverride = async (e) => {
+      e.preventDefault();
+      const date = document.getElementById('ovr-date').value;
+      const userId = document.getElementById('ovr-user').value;
+      const targetType = document.getElementById('ovr-target').value;
+      const note = document.getElementById('ovr-note').value.trim() || 'Cambio puntual de turno';
+
+      const newOvr = {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        date,
+        userId,
+        targetType,
+        note,
+        createdBy: state.activeUser,
+        createdAt: new Date().toISOString()
+      };
+
+      if (supabaseClient && state.sbConnected) {
+        await supabaseClient.from('shift_overrides').insert({
+          date: newOvr.date,
+          user_id: newOvr.userId,
+          target_type: newOvr.targetType,
+          note: newOvr.note,
+          created_by: newOvr.createdBy
+        });
+        await fetchAllFromSupabase();
+      } else {
+        state.overrides = state.overrides.filter(o => !(o.date === date && o.userId === userId));
+        state.overrides.unshift(newOvr);
+        saveLocalBackup();
+        render();
+      }
+      showToast('Cambio de turno registrado sin alterar el ciclo futuro');
+    };
+
+    window.revertOverride = async (id) => {
+      if (supabaseClient && state.sbConnected) {
+        await supabaseClient.from('shift_overrides').delete().eq('id', id);
+        await fetchAllFromSupabase();
+      } else {
+        state.overrides = state.overrides.filter(o => o.id !== id);
+        saveLocalBackup();
+        render();
+      }
+      showToast('Turno original restaurado');
+    };
+
+    window.updateProfileField = async (uid, field, value) => {
+      state.profiles[uid][field] = value;
+      saveLocalBackup();
+      if (supabaseClient && state.sbConnected) {
+        const p = state.profiles[uid];
+        await supabaseClient.from('profiles').upsert({
+          id: uid,
+          name: p.name,
+          color: p.color,
+          cycle_offset: p.cycleOffset,
+          can_approve_vacations: p.canApproveVacations,
+          can_edit_overrides: p.canEditOverrides
+        });
+        await fetchAllFromSupabase();
+      } else {
+        render();
+      }
+      showToast('Perfil actualizado');
+    };
+
+    window.saveSupabaseCredentials = () => {
+      const u = document.getElementById('sb-url-input').value.trim();
+      const k = document.getElementById('sb-key-input').value.trim();
+      state.sbUrl = u;
+      state.sbKey = k;
+      try {
+        localStorage.setItem('turnos_sb_url', u);
+        localStorage.setItem('turnos_sb_key', k);
+      } catch (e) {}
+      initSupabase();
+      showToast('Credenciales guardadas');
+    };
+
+    function render() {
+      const activeP = state.profiles[state.activeUser];
+      const pendingCount = state.vacations.filter(v => v.status === 'pendiente').length;
+
+      // Construcción de celdas del mes actual
+      const firstDay = new Date(Date.UTC(state.currentYear, state.currentMonth, 1));
+      const startWeekday = (firstDay.getUTCDay() + 6) % 7;
+      const daysInMonth = new Date(Date.UTC(state.currentYear, state.currentMonth + 1, 0)).getUTCDate();
+
+      let calendarCellsHtml = '';
+      for (let i = 0; i < startWeekday; i++) {
+        calendarCellsHtml += `<div class="h-20 sm:h-24 rounded-xl bg-slate-950/30 border border-slate-900/40"></div>`;
+      }
+
+      const workersToRender = state.filterWorker === 'all' ? ['user1', 'user2', 'user3'] : [state.filterWorker];
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dStr = formatDateStr(state.currentYear, state.currentMonth, d);
+        const isSel = state.selectedDate === dStr;
+        const isRef = dStr === '2026-10-16';
+
+        let badgesHtml = '';
+        workersToRender.forEach(uid => {
+          const st = getWorkerDayStatus(uid, dStr);
+          const p = state.profiles[uid];
+          const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
+
+          if (st.approvedVacation) {
+            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between border border-dashed ${t.badge}"><span>${p.name}</span><span>🏖️</span></div>`;
+          } else if (st.pendingVacation) {
+            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between bg-amber-500/15 text-amber-300 border border-dotted border-amber-400"><span>${p.name}?</span><span>⏳</span></div>`;
+          } else if (st.effectiveWorking) {
+            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold truncate flex items-center justify-between text-white ${t.bg} ${st.override ? 'ring-1 ring-amber-300' : ''}"><span>${p.name}</span><span>${st.override ? '⇄' : '🌙'}</span></div>`;
+          } else if (st.override) {
+            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] text-amber-300 bg-slate-800 border border-amber-400/40 truncate flex justify-between"><span class="line-through">${p.name}</span><span>LIB</span></div>`;
+          } else if (state.filterWorker !== 'all') {
+            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] text-slate-400 bg-slate-900 flex justify-between"><span>Libre</span><span>☀️</span></div>`;
+          }
+        });
+
+        calendarCellsHtml += `
+          <button onclick="selectDate('${dStr}')" class="h-20 sm:h-24 rounded-xl p-1 sm:p-1.5 flex flex-col justify-between text-left transition border overflow-hidden ${isSel ? 'bg-slate-800/90 border-blue-400 ring-2 ring-blue-500/40' : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80'}">
+            <div class="flex items-center justify-between w-full">
+              <span class="text-xs sm:text-sm font-bold ${isSel ? 'text-white' : 'text-slate-300'}">${d}</span>
+              ${isRef ? '<span class="text-[8px] px-1 rounded bg-blue-500/30 text-blue-300 font-bold">Ref</span>' : ''}
+            </div>
+            <div class="space-y-0.5 w-full">${badgesHtml}</div>
+          </button>
+        `;
+      }
+
+      // Detalle lateral de la fecha seleccionada
+      let detailCardsHtml = '';
+      ['user1', 'user2', 'user3'].forEach(uid => {
+        const p = state.profiles[uid];
+        const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
+        const st = getWorkerDayStatus(uid, state.selectedDate);
+        detailCardsHtml += `
+          <div class="p-3 rounded-xl border ${st.effectiveWorking ? `${t.soft} ${t.border}` : 'bg-slate-950/60 border-slate-800'}">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full ${t.dot}"></span>
+                <span class="font-bold text-sm text-white">${p.name}</span>
+              </div>
+              <span class="text-[11px] text-slate-400">Día ${st.cycleDay}/6 del ciclo</span>
+            </div>
+            <div class="mt-1.5 flex items-center justify-between text-xs">
+              <span>${st.approvedVacation ? '🏖️ Vacaciones Aprobadas' : st.effectiveWorking ? '🌙 <strong>TRABAJA ESTA NOCHE</strong>' : '☀️ Noche Libre'}</span>
+              ${st.override ? `<button onclick="revertOverride('${st.override.id}')" class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[11px]">Revertir</button>` : ''}
+            </div>
+          </div>
+        `;
+      });
+
+      // Contenido según la pestaña activa
+      let mainContentHtml = '';
+
+      if (state.activeTab === 'calendario') {
+        mainContentHtml = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div class="lg:col-span-8 bg-slate-900/70 border border-slate-800 rounded-2xl p-3 sm:p-5">
+              <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                  <button onclick="changeMonth(-1)" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-bold">←</button>
+                  <h2 class="text-base sm:text-lg font-bold min-w-[140px] text-center">${MONTH_NAMES[state.currentMonth]} ${state.currentYear}</h2>
+                  <button onclick="changeMonth(1)" class="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 font-bold">→</button>
+                </div>
+                <div class="flex gap-1.5">
+                  <button onclick="goToDate('hoy')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 border border-slate-700">Hoy</button>
+                  <button onclick="goToDate('ref')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">16 Oct 26</button>
+                  <button onclick="setTab('anual')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 border border-slate-700">Vista Anual</button>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-1.5 py-3 flex-wrap">
+                <button onclick="setFilterWorker('all')" class="px-2.5 py-1 rounded-lg text-xs font-semibold border ${state.filterWorker === 'all' ? 'bg-white text-slate-900 border-white' : 'bg-slate-800 text-slate-400 border-slate-700'}">Ver los 3</button>
+                ${['user1','user2','user3'].map(u => `<button onclick="setFilterWorker('${u}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold border ${state.filterWorker === u ? 'bg-blue-600 text-white border-blue-400' : 'bg-slate-800 text-slate-300 border-slate-700'}">${state.profiles[u].name}</button>`).join('')}
+              </div>
+
+              <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-slate-400 mb-1">
+                ${WEEKDAYS_SHORT.map(w => `<div>${w}</div>`).join('')}
+              </div>
+              <div class="grid grid-cols-7 gap-1 sm:gap-1.5">${calendarCellsHtml}</div>
+            </div>
+
+            <div class="lg:col-span-4 space-y-4">
+              <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="border-b border-slate-800 pb-2">
+                  <span class="text-[11px] uppercase text-blue-400 font-bold">Detalle de la noche</span>
+                  <h3 class="text-lg font-bold">${formatHumanDate(state.selectedDate)}</h3>
+                </div>
+                <div class="space-y-2.5">${detailCardsHtml}</div>
+                <div class="grid grid-cols-2 gap-2 pt-2">
+                  <button onclick="state.vacStart='${state.selectedDate}';state.vacEnd='${state.selectedDate}';setTab('vacaciones')" class="py-2 px-3 rounded-xl text-xs font-bold bg-emerald-600/20 text-emerald-300 border border-emerald-500/30">🏖️ Pedir Permiso</button>
+                  <button onclick="state.ovrDate='${state.selectedDate}';setTab('cambios')" class="py-2 px-3 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">⇄ Cambiar Turno</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (state.activeTab === 'anual') {
+        const targetUid = state.filterWorker === 'all' ? state.activeUser : state.filterWorker;
+        const t = COLOR_THEMES[state.profiles[targetUid].color] || COLOR_THEMES.blue;
+        let monthsGridHtml = '';
+        MONTH_NAMES.forEach((mName, mIdx) => {
+          const fDay = new Date(Date.UTC(state.currentYear, mIdx, 1));
+          const off = (fDay.getUTCDay() + 6) % 7;
+          const tot = new Date(Date.UTC(state.currentYear, mIdx + 1, 0)).getUTCDate();
+          let daysHtml = '';
+          for (let i = 0; i < off; i++) daysHtml += `<div class="h-5"></div>`;
+          for (let d = 1; d <= tot; d++) {
+            const dStr = formatDateStr(state.currentYear, mIdx, d);
+            const st = getWorkerDayStatus(targetUid, dStr);
+            const cls = st.approvedVacation ? 'bg-emerald-500/40 text-white' : st.effectiveWorking ? `${t.bg} text-white font-bold` : 'bg-slate-900 text-slate-400';
+            daysHtml += `<div class="h-5 rounded flex items-center justify-center text-[10px] ${cls}">${d}</div>`;
+          }
+          monthsGridHtml += `
+            <div onclick="state.currentMonth=${mIdx};setTab('calendario')" class="p-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-blue-500 cursor-pointer">
+              <div class="flex justify-between items-center mb-2"><h4 class="font-bold text-sm">${mName}</h4><span class="text-[10px] text-slate-400">Abrir →</span></div>
+              <div class="grid grid-cols-7 gap-1">${daysHtml}</div>
+            </div>
+          `;
+        });
+
+        mainContentHtml = `
+          <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <h2 class="text-lg font-bold">Vista Anual ${state.currentYear} (${state.profiles[targetUid].name})</h2>
+              <div class="flex gap-2">
+                <button onclick="changeYear(-1)" class="px-3 py-1 rounded-lg bg-slate-800 text-xs font-bold">← ${state.currentYear - 1}</button>
+                <button onclick="changeYear(1)" class="px-3 py-1 rounded-lg bg-slate-800 text-xs font-bold">${state.currentYear + 1} →</button>
+              </div>
+            </div>
+            <div class="flex gap-2">
+              ${['user1','user2','user3'].map(u => `<button onclick="setFilterWorker('${u}')" class="px-3 py-1.5 rounded-xl text-xs font-bold ${targetUid === u ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}">${state.profiles[u].name}</button>`).join('')}
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">${monthsGridHtml}</div>
+          </div>
+        `;
+      } else if (state.activeTab === 'vacaciones') {
+        const listHtml = state.vacations.length === 0
+          ? `<p class="text-center py-8 text-slate-400 text-xs">No hay solicitudes registradas todavía.</p>`
+          : state.vacations.map(v => {
+              const p = state.profiles[v.userId] || DEFAULT_PROFILES.user1;
+              return `
+                <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div class="flex items-center gap-2">
+                      <span class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-bold">${p.name}</span>
+                      <span class="text-xs font-bold">${formatHumanDate(v.startDate)} → ${formatHumanDate(v.endDate)}</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400 mt-1">Tipo: ${v.type} · Noches trabajo afectadas: <strong class="text-amber-300">${v.workNightsAffected}</strong></p>
+                    ${v.comment ? `<p class="text-xs text-slate-300 italic mt-1">"${v.comment}"</p>` : ''}
+                  </div>
+                  <div class="flex items-center gap-1.5">
+                    <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase ${v.status === 'aprobada' ? 'bg-emerald-500/20 text-emerald-300' : v.status === 'rechazada' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'}">${v.status}</span>
+                    ${activeP.canApproveVacations && v.status === 'pendiente' ? `
+                      <button onclick="reviewVacation('${v.id}','aprobada')" class="px-2 py-1 rounded bg-emerald-600 text-white text-xs font-bold">Aprobar</button>
+                      <button onclick="reviewVacation('${v.id}','rechazada')" class="px-2 py-1 rounded bg-rose-600 text-white text-xs font-bold">Rechazar</button>
+                    ` : ''}
+                    <button onclick="deleteVacation('${v.id}')" class="px-2 py-1 rounded bg-slate-800 text-slate-400 text-xs">Borrar</button>
+                  </div>
+                </div>
+              `;
+            }).join('');
+
+        mainContentHtml = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <form onsubmit="submitVacation(event)" class="lg:col-span-5 bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-3 h-fit">
+              <h2 class="text-base font-bold">Solicitar Vacaciones (${activeP.name})</h2>
+              <div class="grid grid-cols-2 gap-2">
+                <div><label class="text-xs text-slate-400">Inicio</label><input id="vac-start" type="date" value="${state.vacStart}" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+                <div><label class="text-xs text-slate-400">Fin</label><input id="vac-end" type="date" value="${state.vacEnd}" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400">Tipo de permiso</label>
+                <select id="vac-type" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">
+                  <option value="vacaciones">🏖️ Vacaciones</option>
+                  <option value="asuntos_propios">📋 Asuntos Propios</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400">Comentario opcional</label>
+                <input id="vac-comment" type="text" placeholder="Motivo o nota..." class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" />
+              </div>
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs">Enviar Solicitud</button>
+            </form>
+            <div class="lg:col-span-7 bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <h2 class="text-base font-bold">Solicitudes del Equipo (${state.vacations.length})</h2>
+              <div class="space-y-2">${listHtml}</div>
+            </div>
+          </div>
+        `;
+      } else if (state.activeTab === 'cambios') {
+        const ovrHtml = state.overrides.length === 0
+          ? `<p class="text-center py-8 text-slate-400 text-xs">No hay cambios puntuales registrados.</p>`
+          : state.overrides.map(o => `
+              <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+                <div>
+                  <span class="text-xs font-bold">${formatHumanDate(o.date)}</span> ·
+                  <span class="text-xs text-blue-300 font-bold">${state.profiles[o.userId]?.name}</span> →
+                  <span class="text-xs font-bold text-amber-300">${o.targetType === 'trabaja' ? '🌙 TRABAJA' : '☀️ LIBRA'}</span>
+                  <p class="text-[11px] text-slate-400">${o.note}</p>
+                </div>
+                <button onclick="revertOverride('${o.id}')" class="px-2.5 py-1 rounded-lg bg-slate-800 text-xs text-amber-300 font-bold">Revertir</button>
+              </div>
+            `).join('');
+
+        mainContentHtml = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <form onsubmit="submitOverride(event)" class="lg:col-span-5 bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-3 h-fit">
+              <h2 class="text-base font-bold">Cambio Puntual de Turno</h2>
+              <div><label class="text-xs text-slate-400">Fecha</label><input id="ovr-date" type="date" value="${state.ovrDate}" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <div>
+                <label class="text-xs text-slate-400">Trabajador</label>
+                <select id="ovr-user" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">
+                  ${['user1','user2','user3'].map(u => `<option value="${u}" ${state.ovrUser === u ? 'selected' : ''}>${state.profiles[u].name}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400">Estado en esa noche</label>
+                <select id="ovr-target" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">
+                  <option value="trabaja">🌙 Pasa a Trabajar</option>
+                  <option value="libre">☀️ Pasa a Librar</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-slate-400">Observación</label>
+                <input id="ovr-note" type="text" placeholder="Ej: Cambio con compañero..." class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" />
+              </div>
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs">Guardar Cambio</button>
+            </form>
+            <div class="lg:col-span-7 bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <h2 class="text-base font-bold">Historial de Cambios (${state.overrides.length})</h2>
+              <div class="space-y-2">${ovrHtml}</div>
+            </div>
+          </div>
+        `;
+      } else if (state.activeTab === 'ajustes') {
+        mainContentHtml = `
+          <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-4">
+            <h2 class="text-base font-bold">Configuración de Santos, Guerrero y Sergio</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              ${['user1','user2','user3'].map(uid => {
+                const p = state.profiles[uid];
+                return `
+                  <div class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                    <div>
+                      <label class="text-xs text-slate-400">Nombre</label>
+                      <input type="text" value="${p.name}" onchange="updateProfileField('${uid}','name',this.value)" class="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-sm font-bold text-white" />
+                    </div>
+                    <div>
+                      <label class="text-xs text-slate-400">Inicio de su ciclo en Octubre 2026</label>
+                      <select onchange="updateProfileField('${uid}','cycleOffset',Number(this.value))" class="w-full p-2 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white">
+                        <option value="0" ${p.cycleOffset === 0 ? 'selected' : ''}>Trabaja 16 y 17 oct (Base)</option>
+                        <option value="2" ${p.cycleOffset === 2 ? 'selected' : ''}>Trabaja 18 y 19 oct (+2 días)</option>
+                        <option value="4" ${p.cycleOffset === 4 ? 'selected' : ''}>Trabaja 20 y 21 oct (+4 días)</option>
+                      </select>
+                    </div>
+                    <label class="flex items-center justify-between text-xs pt-2">
+                      <span>Puede aprobar vacaciones</span>
+                      <input type="checkbox" ${p.canApproveVacations ? 'checked' : ''} onchange="updateProfileField('${uid}','canApproveVacations',this.checked)" class="w-4 h-4" />
+                    </label>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      } else if (state.activeTab === 'supabase') {
+        mainContentHtml = `
+          <div class="bg-slate-900/70 border border-slate-800 rounded-2xl p-4 space-y-4">
+            <h2 class="text-base font-bold text-blue-400">Conexión en Tiempo Real con Supabase</h2>
+            <p class="text-xs text-slate-300">Pega aquí la URL y la clave <code>anon public</code> de tu proyecto de Supabase para sincronizar los 3 móviles al instante:</p>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input id="sb-url-input" type="text" value="${state.sbUrl}" placeholder="https://xxxx.supabase.co" class="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" />
+              <input id="sb-key-input" type="text" value="${state.sbKey}" placeholder="eyJhbGciOiJIUzI1NiIsInR..." class="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" />
+            </div>
+            <button onclick="saveSupabaseCredentials()" class="px-4 py-2.5 rounded-xl bg-blue-600 text-white font-bold text-xs">Guardar y Conectar Supabase</button>
+          </div>
+        `;
+      }
+
+      document.getElementById('app').innerHTML = `
+        <header class="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur border-b border-slate-800 px-3 sm:px-6 py-3">
+          <div class="max-w-5xl mx-auto flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+              <div class="w-8 h-8 rounded-xl bg-blue-600 flex items-center justify-center font-bold">🌙</div>
+              <div>
+                <h1 class="text-sm sm:text-base font-bold">Turnos Nocturnos 2-4</h1>
+                <p class="text-[11px] text-slate-400">${state.sbConnected ? '🟢 Sincronizado con Supabase' : '⚡ Modo Rápido Activo'}</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+              ${['user1','user2','user3'].map(u => `<button onclick="setActiveUser('${u}')" class="px-2.5 py-1 rounded-lg text-xs font-bold ${state.activeUser === u ? 'bg-blue-600 text-white' : 'text-slate-400'}">${state.profiles[u].name}</button>`).join('')}
+            </div>
+          </div>
+        </header>
+
+        <main class="max-w-5xl mx-auto px-3 sm:px-6 py-4">${mainContentHtml}</main>
+
+        <nav class="fixed bottom-0 left-0 right-0 z-40 bg-[#090d16]/95 border-t border-slate-800 px-2 py-1.5">
+          <div class="grid grid-cols-5 gap-1 max-w-md mx-auto">
+            <button onclick="setTab('calendario')" class="py-1.5 rounded-xl text-center ${state.activeTab === 'calendario' || state.activeTab === 'anual' ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400'}"><div class="text-sm">📅</div><div class="text-[10px]">Turnos</div></button>
+            <button onclick="setTab('vacaciones')" class="py-1.5 rounded-xl text-center relative ${state.activeTab === 'vacaciones' ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400'}"><div class="text-sm">🏖️</div><div class="text-[10px]">Vacaciones ${pendingCount ? `(${pendingCount})` : ''}</div></button>
+            <button onclick="setTab('cambios')" class="py-1.5 rounded-xl text-center ${state.activeTab === 'cambios' ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400'}"><div class="text-sm">⇄</div><div class="text-[10px]">Cambios</div></button>
+            <button onclick="setTab('ajustes')" class="py-1.5 rounded-xl text-center ${state.activeTab === 'ajustes' ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400'}"><div class="text-sm">⚙️</div><div class="text-[10px]">Equipo</div></button>
+            <button onclick="setTab('supabase')" class="py-1.5 rounded-xl text-center ${state.activeTab === 'supabase' ? 'text-blue-400 bg-blue-500/10 font-bold' : 'text-slate-400'}"><div class="text-sm">☁️</div><div class="text-[10px]">Nube</div></button>
+          </div>
+        </nav>
+      `;
+    }
+
+    window.onload = function() {
+      initSupabase();
+      render();
+    };
+  </script>
+</body>
+</html>
+```
