@@ -1,0 +1,2221 @@
+```react
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  onSnapshot, 
+  collection, 
+  addDoc 
+} from 'firebase/firestore';
+import { 
+  Calendar as CalendarIcon, 
+  Moon, 
+  Sun, 
+  Palmtree, 
+  ArrowLeftRight, 
+  Settings, 
+  CheckCircle2, 
+  XCircle, 
+  Clock, 
+  ChevronLeft, 
+  ChevronRight, 
+  ShieldAlert, 
+  UserCheck, 
+  RotateCcw, 
+  Code2, 
+  Smartphone, 
+  Info,
+  AlertTriangle,
+  Copy,
+  Check,
+  Sparkles,
+  Grid,
+  Download,
+  Database,
+  ExternalLink
+} from 'lucide-react';
+
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'turnos-nocturnos-2-4';
+
+export type UserId = 'user1' | 'user2' | 'user3';
+
+export interface WorkerProfile {
+  id: UserId;
+  name: string;
+  color: 'blue' | 'green' | 'orange' | 'purple' | 'rose' | 'cyan';
+  cycleOffset: number; // 0 = Starts Oct 16, 2 = Starts Oct 18, 4 = Starts Oct 20
+  canApproveVacations: boolean;
+  canEditOverrides: boolean;
+}
+
+export type LeaveType = 'vacaciones' | 'asuntos_propios';
+export type RequestStatus = 'pendiente' | 'aprobada' | 'rechazada';
+
+export interface VacationRequest {
+  id: string;
+  userId: UserId;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  type: LeaveType;
+  comment: string;
+  status: RequestStatus;
+  createdAt: string;
+  reviewedBy?: UserId;
+  reviewedAt?: string;
+  workNightsAffected: number;
+}
+
+export type OverrideType = 'trabaja' | 'libre' | 'intercambio';
+
+export interface ShiftOverride {
+  id: string;
+  date: string; // YYYY-MM-DD
+  userId: UserId;
+  targetType: 'trabaja' | 'libre';
+  swappedWithUserId?: UserId;
+  note: string;
+  createdBy: UserId;
+  createdAt: string;
+}
+
+const COLOR_THEMES: Record<WorkerProfile['color'], {
+  name: string;
+  bg: string;
+  bgSoft: string;
+  text: string;
+  border: string;
+  badge: string;
+  dot: string;
+}> = {
+  blue: {
+    name: 'Azul',
+    bg: 'bg-blue-600',
+    bgSoft: 'bg-blue-500/15',
+    text: 'text-blue-400',
+    border: 'border-blue-500/40',
+    badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
+    dot: 'bg-blue-500'
+  },
+  green: {
+    name: 'Verde',
+    bg: 'bg-emerald-600',
+    bgSoft: 'bg-emerald-500/15',
+    text: 'text-emerald-400',
+    border: 'border-emerald-500/40',
+    badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+    dot: 'bg-emerald-500'
+  },
+  orange: {
+    name: 'Naranja',
+    bg: 'bg-amber-500',
+    bgSoft: 'bg-amber-500/15',
+    text: 'text-amber-400',
+    border: 'border-amber-500/40',
+    badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+    dot: 'bg-amber-500'
+  },
+  purple: {
+    name: 'Violeta',
+    bg: 'bg-purple-600',
+    bgSoft: 'bg-purple-500/15',
+    text: 'text-purple-400',
+    border: 'border-purple-500/40',
+    badge: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+    dot: 'bg-purple-500'
+  },
+  rose: {
+    name: 'Coral',
+    bg: 'bg-rose-600',
+    bgSoft: 'bg-rose-500/15',
+    text: 'text-rose-400',
+    border: 'border-rose-500/40',
+    badge: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+    dot: 'bg-rose-500'
+  },
+  cyan: {
+    name: 'Turquesa',
+    bg: 'bg-cyan-600',
+    bgSoft: 'bg-cyan-500/15',
+    text: 'text-cyan-400',
+    border: 'border-cyan-500/40',
+    badge: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40',
+    dot: 'bg-cyan-500'
+  }
+};
+
+const DEFAULT_PROFILES: Record<UserId, WorkerProfile> = {
+  user1: {
+    id: 'user1',
+    name: 'Santos',
+    color: 'blue',
+    cycleOffset: 0, // 16 y 17 oct trabaja
+    canApproveVacations: true,
+    canEditOverrides: true
+  },
+  user2: {
+    id: 'user2',
+    name: 'Guerrero',
+    color: 'green',
+    cycleOffset: 0, // Por defecto el mismo patrón 16 y 17 oct (ajustable en Ajustes)
+    canApproveVacations: false,
+    canEditOverrides: true
+  },
+  user3: {
+    id: 'user3',
+    name: 'Sergio',
+    color: 'orange',
+    cycleOffset: 0, // Por defecto el mismo patrón 16 y 17 oct (ajustable en Ajustes)
+    canApproveVacations: false,
+    canEditOverrides: true
+  }
+};
+
+// Fecha de referencia: 16 de octubre de 2026 (UTC mediodía para evitar cualquier desfase por cambio de hora DST)
+const REFERENCE_UTC_MS = Date.UTC(2026, 9, 16, 12, 0, 0); // Mes 9 = Octubre (0-indexado)
+const MS_PER_DAY = 86400000;
+
+export function parseDateUTC(dateStr: string): number {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return Date.UTC(y, m - 1, d, 12, 0, 0);
+}
+
+export function formatDateStr(year: number, monthZeroIndexed: number, day: number): string {
+  const m = String(monthZeroIndexed + 1).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${year}-${m}-${d}`;
+}
+
+export function formatHumanDate(dateStr: string): string {
+  if (!dateStr) return '';
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const months = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  return `${d} ${months[m - 1]} ${y}`;
+}
+
+/**
+ * Calcula si una fecha corresponde a noche de trabajo según el ciclo de 6 días:
+ * - Día 0 y 1 del ciclo: Trabajo (ej. 16 y 17 de oct de 2026)
+ * - Día 2, 3, 4 y 5 del ciclo: Libre (ej. 18, 19, 20 y 21 de oct de 2026)
+ * Funciona de forma exacta hacia el futuro y hacia el pasado sin límite de fechas.
+ */
+export function isBaseWorkNight(dateStr: string, cycleOffset: number = 0): boolean {
+  const targetMs = parseDateUTC(dateStr);
+  const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
+  const cycleIndex = ((diffDays % 6) + 6) % 6;
+  return cycleIndex === 0 || cycleIndex === 1;
+}
+
+export function getCycleDayNumber(dateStr: string, cycleOffset: number = 0): number {
+  const targetMs = parseDateUTC(dateStr);
+  const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
+  return (((diffDays % 6) + 6) % 6) + 1; // 1..6
+}
+
+export function getDatesInRange(startStr: string, endStr: string): string[] {
+  const startMs = parseDateUTC(startStr);
+  const endMs = parseDateUTC(endStr);
+  if (endMs < startMs) return [];
+  const result: string[] = [];
+  for (let ms = startMs; ms <= endMs; ms += MS_PER_DAY) {
+    const dt = new Date(ms);
+    result.push(formatDateStr(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+  }
+  return result;
+}
+
+const MONTH_NAMES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+];
+
+const WEEKDAYS_SHORT = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+
+export default function App() {
+  const [fbUser, setFbUser] = useState<FirebaseUser | null>(null);
+  const [activeUser, setActiveUser] = useState<UserId>('user1');
+  const [activeTab, setActiveTab] = useState<'calendario' | 'anual' | 'vacaciones' | 'cambios' | 'ajustes' | 'despliegue'>('calendario');
+
+  // Inicializamos en Octubre de 2026 (fecha de referencia solicitada)
+  const [currentYear, setCurrentYear] = useState<number>(2026);
+  const [currentMonth, setCurrentMonth] = useState<number>(9); // 9 = Octubre
+  const [selectedDate, setSelectedDate] = useState<string>('2026-10-16');
+  const [filterWorker, setFilterWorker] = useState<UserId | 'all'>('all');
+
+  // Datos sincronizados en la nube
+  const [profiles, setProfiles] = useState<Record<UserId, WorkerProfile>>(DEFAULT_PROFILES);
+  const [vacations, setVacations] = useState<VacationRequest[]>([]);
+  const [overrides, setOverrides] = useState<ShiftOverride[]>([]);
+  const [syncStatus, setSyncStatus] = useState<'conectando' | 'sincronizado' | 'local'>('conectando');
+
+  // Estado para formularios de Vacaciones
+  const [vacStart, setVacStart] = useState<string>('2026-10-22');
+  const [vacEnd, setVacEnd] = useState<string>('2026-10-25');
+  const [vacType, setVacType] = useState<LeaveType>('vacaciones');
+  const [vacComment, setVacComment] = useState<string>('');
+  const [editingVacationId, setEditingVacationId] = useState<string | null>(null);
+
+  // Estado para formulario de Cambios Excepcionales de Turno
+  const [ovrDate, setOvrDate] = useState<string>('2026-10-16');
+  const [ovrUser, setOvrUser] = useState<UserId>('user1');
+  const [ovrMode, setOvrMode] = useState<'puntual' | 'intercambio'>('puntual');
+  const [ovrTargetStatus, setOvrTargetStatus] = useState<'trabaja' | 'libre'>('libre');
+  const [ovrSwapPartner, setOvrSwapPartner] = useState<UserId>('user2');
+  const [ovrNote, setOvrNote] = useState<string>('');
+
+  // Mensajes de feedback no intrusivos (sin alert)
+  const [toast, setToast] = useState<{ text: string; type: 'success' | 'info' | 'warning' } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [sbUrlInput, setSbUrlInput] = useState<string>('');
+  const [sbKeyInput, setSbKeyInput] = useState<string>('');
+
+  const showToast = (text: string, type: 'success' | 'info' | 'warning' = 'success') => {
+    setToast({ text, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error('Error en autenticación cloud:', err);
+        setSyncStatus('local');
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setFbUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!fbUser) return;
+
+    const profilesRef = collection(db, 'artifacts', appId, 'public', 'data', 'profiles');
+    const vacationsRef = collection(db, 'artifacts', appId, 'public', 'data', 'vacations');
+    const overridesRef = collection(db, 'artifacts', appId, 'public', 'data', 'overrides');
+
+    const unsubProfiles = onSnapshot(
+      profilesRef,
+      (snap) => {
+        setSyncStatus('sincronizado');
+        if (snap.empty) {
+          // Sembrar los 3 perfiles por defecto en la nube
+          (Object.keys(DEFAULT_PROFILES) as UserId[]).forEach((uid) => {
+            setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', uid), DEFAULT_PROFILES[uid]);
+          });
+        } else {
+          const loaded: Record<UserId, WorkerProfile> = { ...DEFAULT_PROFILES };
+          snap.forEach((d) => {
+            const data = d.data() as WorkerProfile;
+            if (data && data.id) {
+              // Migrar automáticamente si aún tenían los nombres genéricos iniciales
+              const isGenericName =
+                data.name === 'Usuario 1 (Coord.)' ||
+                data.name === 'Usuario 1' ||
+                data.name === 'Usuario 2' ||
+                data.name === 'Usuario 3';
+              const updatedProfile = isGenericName
+                ? { ...data, name: DEFAULT_PROFILES[data.id].name }
+                : data;
+              loaded[data.id] = updatedProfile;
+              if (isGenericName) {
+                setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', data.id), updatedProfile);
+              }
+            }
+          });
+          setProfiles(loaded);
+        }
+      },
+      () => setSyncStatus('local')
+    );
+
+    const unsubVacations = onSnapshot(
+      vacationsRef,
+      (snap) => {
+        const list: VacationRequest[] = [];
+        snap.forEach((d) => list.push({ ...(d.data() as VacationRequest), id: d.id }));
+        list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setVacations(list);
+      },
+      () => {}
+    );
+
+    const unsubOverrides = onSnapshot(
+      overridesRef,
+      (snap) => {
+        const list: ShiftOverride[] = [];
+        snap.forEach((d) => list.push({ ...(d.data() as ShiftOverride), id: d.id }));
+        list.sort((a, b) => b.date.localeCompare(a.date));
+        setOverrides(list);
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubProfiles();
+      unsubVacations();
+      unsubOverrides();
+    };
+  }, [fbUser]);
+
+  const getWorkerDayStatus = (userId: UserId, dateStr: string) => {
+    const profile = profiles[userId];
+    const baseWorking = isBaseWorkNight(dateStr, profile.cycleOffset);
+    const cycleDay = getCycleDayNumber(dateStr, profile.cycleOffset);
+
+    // 1. ¿Hay cambio excepcional en esta fecha para este usuario?
+    const override = overrides.find((o) => o.date === dateStr && o.userId === userId);
+
+    // 2. ¿Hay solicitud de vacaciones o asuntos propios que cubra esta fecha?
+    const userVacationsOnDate = vacations.filter(
+      (v) => v.userId === userId && dateStr >= v.startDate && dateStr <= v.endDate && v.status !== 'rechazada'
+    );
+    const approvedVacation = userVacationsOnDate.find((v) => v.status === 'aprobada');
+    const pendingVacation = userVacationsOnDate.find((v) => v.status === 'pendiente');
+
+    let effectiveWorking = baseWorking;
+    if (override) {
+      effectiveWorking = override.targetType === 'trabaja';
+    }
+    if (approvedVacation) {
+      effectiveWorking = false;
+    }
+
+    return {
+      userId,
+      baseWorking,
+      effectiveWorking,
+      cycleDay,
+      override,
+      approvedVacation,
+      pendingVacation
+    };
+  };
+
+  const vacWorkNightsPreview = useMemo(() => {
+    const dates = getDatesInRange(vacStart, vacEnd);
+    const affectedDates: string[] = [];
+    dates.forEach((d) => {
+      const st = getWorkerDayStatus(activeUser, d);
+      if (st.baseWorking || (st.override && st.override.targetType === 'trabaja')) {
+        affectedDates.push(d);
+      }
+    });
+    return {
+      totalDays: dates.length,
+      affectedDates
+    };
+  }, [vacStart, vacEnd, activeUser, profiles, overrides]);
+
+  const handleSaveVacation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (parseDateUTC(vacEnd) < parseDateUTC(vacStart)) {
+      showToast('La fecha de fin no puede ser anterior a la de inicio.', 'warning');
+      return;
+    }
+
+    const payload = {
+      userId: activeUser,
+      startDate: vacStart,
+      endDate: vacEnd,
+      type: vacType,
+      comment: vacComment.trim(),
+      status: 'pendiente' as RequestStatus,
+      createdAt: new Date().toISOString(),
+      workNightsAffected: vacWorkNightsPreview.affectedDates.length
+    };
+
+    try {
+      if (editingVacationId) {
+        if (fbUser) {
+          await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vacations', editingVacationId), payload);
+        } else {
+          setVacations((prev) => prev.map((v) => (v.id === editingVacationId ? { ...payload, id: editingVacationId } : v)));
+        }
+        setEditingVacationId(null);
+        showToast('Solicitud modificada y vuelta a estado pendiente.', 'info');
+      } else {
+        if (fbUser) {
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'vacations'), payload);
+        } else {
+          setVacations((prev) => [{ ...payload, id: crypto.randomUUID() }, ...prev]);
+        }
+        showToast('Solicitud de permiso enviada y sincronizada.', 'success');
+      }
+      setVacComment('');
+    } catch (err) {
+      console.error(err);
+      showToast('Error al guardar la solicitud.', 'warning');
+    }
+  };
+
+  const handleReviewVacation = async (vacId: string, newStatus: 'aprobada' | 'rechazada') => {
+    const currentProfile = profiles[activeUser];
+    if (!currentProfile.canApproveVacations) {
+      showToast('No tienes permisos de aprobador. Actívalo en Ajustes si corresponde.', 'warning');
+      return;
+    }
+    try {
+      const updateData = {
+        status: newStatus,
+        reviewedBy: activeUser,
+        reviewedAt: new Date().toISOString()
+      };
+      if (fbUser) {
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vacations', vacId), updateData);
+      } else {
+        setVacations((prev) => prev.map((v) => (v.id === vacId ? { ...v, ...updateData } : v)));
+      }
+      showToast(`Solicitud ${newStatus === 'aprobada' ? 'aprobada' : 'rechazada'} correctamente.`, 'success');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteVacation = async (vac: VacationRequest) => {
+    if (vac.userId !== activeUser && !profiles[activeUser].canApproveVacations) {
+      showToast('Solo puedes eliminar tus propias solicitudes.', 'warning');
+      return;
+    }
+    try {
+      if (fbUser) {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'vacations', vac.id));
+      } else {
+        setVacations((prev) => prev.filter((v) => v.id !== vac.id));
+      }
+      showToast('Solicitud eliminada.', 'info');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleCreateOverride = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profiles[activeUser].canEditOverrides) {
+      showToast('Tu perfil no tiene permiso para registrar cambios de turno.', 'warning');
+      return;
+    }
+
+    try {
+      const nowIso = new Date().toISOString();
+      if (ovrMode === 'puntual') {
+        const existing = overrides.find((o) => o.date === ovrDate && o.userId === ovrUser);
+        const item: Omit<ShiftOverride, 'id'> = {
+          date: ovrDate,
+          userId: ovrUser,
+          targetType: ovrTargetStatus,
+          note: ovrNote.trim() || 'Modificación puntual de guardia',
+          createdBy: activeUser,
+          createdAt: nowIso
+        };
+
+        if (fbUser) {
+          if (existing) {
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'overrides', existing.id), item);
+          } else {
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'overrides'), item);
+          }
+        } else {
+          setOverrides((prev) => [
+            ...prev.filter((o) => !(o.date === ovrDate && o.userId === ovrUser)),
+            { ...item, id: crypto.randomUUID() }
+          ]);
+        }
+        showToast('Cambio puntual registrado sin alterar el ciclo posterior.', 'success');
+      } else {
+        // Intercambio entre dos compañeros en esa fecha
+        if (ovrUser === ovrSwapPartner) {
+          showToast('Selecciona dos compañeros distintos para el intercambio.', 'warning');
+          return;
+        }
+        const statusA = getWorkerDayStatus(ovrUser, ovrDate);
+        const statusB = getWorkerDayStatus(ovrSwapPartner, ovrDate);
+
+        const itemA: Omit<ShiftOverride, 'id'> = {
+          date: ovrDate,
+          userId: ovrUser,
+          targetType: statusB.baseWorking ? 'trabaja' : 'libre',
+          swappedWithUserId: ovrSwapPartner,
+          note: ovrNote.trim() || `Intercambio con ${profiles[ovrSwapPartner].name}`,
+          createdBy: activeUser,
+          createdAt: nowIso
+        };
+        const itemB: Omit<ShiftOverride, 'id'> = {
+          date: ovrDate,
+          userId: ovrSwapPartner,
+          targetType: statusA.baseWorking ? 'trabaja' : 'libre',
+          swappedWithUserId: ovrUser,
+          note: ovrNote.trim() || `Intercambio con ${profiles[ovrUser].name}`,
+          createdBy: activeUser,
+          createdAt: nowIso
+        };
+
+        if (fbUser) {
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'overrides'), itemA);
+          await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'overrides'), itemB);
+        } else {
+          setOverrides((prev) => [
+            ...prev,
+            { ...itemA, id: crypto.randomUUID() },
+            { ...itemB, id: crypto.randomUUID() }
+          ]);
+        }
+        showToast(`Intercambio registrado entre ${profiles[ovrUser].name} y ${profiles[ovrSwapPartner].name}.`, 'success');
+      }
+      setOvrNote('');
+    } catch (err) {
+      console.error(err);
+      showToast('Error al registrar el cambio de turno.', 'warning');
+    }
+  };
+
+  const handleRevertOverride = async (ovrId: string) => {
+    if (!profiles[activeUser].canEditOverrides) {
+      showToast('No tienes permisos para revertir cambios de turno.', 'warning');
+      return;
+    }
+    try {
+      if (fbUser) {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'overrides', ovrId));
+      } else {
+        setOverrides((prev) => prev.filter((o) => o.id !== ovrId));
+      }
+      showToast('Cambio revertido. Se ha restaurado el turno original del ciclo 2-4.', 'info');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUpdateProfile = async (uid: UserId, partial: Partial<WorkerProfile>) => {
+    const updated = { ...profiles[uid], ...partial };
+    setProfiles((prev) => ({ ...prev, [uid]: updated }));
+    if (fbUser) {
+      try {
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', uid), updated);
+        showToast(`Perfil de ${updated.name} actualizado en tiempo real.`, 'success');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  const applyRotationPreset = async (mode: 'simultaneo' | 'escalonado') => {
+    const offsets: Record<UserId, number> =
+      mode === 'simultaneo'
+        ? { user1: 0, user2: 0, user3: 0 }
+        : { user1: 0, user2: 2, user3: 4 };
+
+    (Object.keys(offsets) as UserId[]).forEach((uid) => {
+      handleUpdateProfile(uid, { cycleOffset: offsets[uid] });
+    });
+    showToast(
+      mode === 'simultaneo'
+        ? 'Los 3 usuarios tienen ahora el mismo ciclo (16-17 oct trabajo).'
+        : 'Ciclo escalonado aplicado (U1: 16-17 oct, U2: 18-19 oct, U3: 20-21 oct).',
+      'info'
+    );
+  };
+
+  const goToPrevMonth = () => {
+    if (currentMonth === 0) {
+      setCurrentMonth(11);
+      setCurrentYear((y) => y - 1);
+    } else {
+      setCurrentMonth((m) => m - 1);
+    }
+  };
+
+  const goToNextMonth = () => {
+    if (currentMonth === 11) {
+      setCurrentMonth(0);
+      setCurrentYear((y) => y + 1);
+    } else {
+      setCurrentMonth((m) => m + 1);
+    }
+  };
+
+  const goToTodayOrReference = (mode: 'hoy' | 'ref') => {
+    if (mode === 'ref') {
+      setCurrentYear(2026);
+      setCurrentMonth(9);
+      setSelectedDate('2026-10-16');
+    } else {
+      const now = new Date();
+      const y = now.getFullYear();
+      const m = now.getMonth();
+      const d = now.getDate();
+      setCurrentYear(y);
+      setCurrentMonth(m);
+      setSelectedDate(formatDateStr(y, m, d));
+    }
+  };
+
+  const calendarDays = useMemo(() => {
+    const firstDayOfMonth = new Date(Date.UTC(currentYear, currentMonth, 1));
+    // Convertir domingo (0) a 6, lunes (1) a 0
+    const startWeekday = (firstDayOfMonth.getUTCDay() + 6) % 7;
+    const daysInMonth = new Date(Date.UTC(currentYear, currentMonth + 1, 0)).getUTCDate();
+
+    const cells: Array<{ dateStr: string | null; dayNum: number | null }> = [];
+    for (let i = 0; i < startWeekday; i++) {
+      cells.push({ dateStr: null, dayNum: null });
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      cells.push({
+        dateStr: formatDateStr(currentYear, currentMonth, d),
+        dayNum: d
+      });
+    }
+    return cells;
+  }, [currentYear, currentMonth]);
+
+  const copyCode = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    showToast('Código copiado al portapapeles.', 'info');
+    setTimeout(() => setCopiedId(null), 2500);
+  };
+
+  const getStandaloneHtmlString = () => {
+    const cleanUrl = sbUrlInput.trim();
+    const cleanKey = sbKeyInput.trim();
+
+    return `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Turnos Nocturnos 2-4 | Santos, Guerrero y Sergio</title>
+  <meta name="theme-color" content="#090d16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Turnos 2-4" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-[#090d16] text-slate-100 min-h-screen font-sans pb-20">
+  <div id="app"></div>
+  <script>
+    const DEFAULT_SB_URL = ${JSON.stringify(cleanUrl)};
+    const DEFAULT_SB_KEY = ${JSON.stringify(cleanKey)};
+    const savedUrl = localStorage.getItem('sb_url') || DEFAULT_SB_URL;
+    const savedKey = localStorage.getItem('sb_key') || DEFAULT_SB_KEY;
+    let supabaseClient = null;
+    if (savedUrl && savedKey && window.supabase) {
+      try { supabaseClient = window.supabase.createClient(savedUrl, savedKey); } catch(e) {}
+    }
+
+    const REF_UTC = Date.UTC(2026, 9, 16, 12, 0, 0);
+    const MS_DAY = 86400000;
+    const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const WEEKDAYS = ['L','M','X','J','V','S','D'];
+
+    let state = {
+      activeUser: 'user1',
+      year: 2026,
+      month: 9,
+      selectedDate: '2026-10-16',
+      tab: 'calendario',
+      profiles: ${JSON.stringify(profiles)},
+      vacations: ${JSON.stringify(vacations)},
+      overrides: ${JSON.stringify(overrides)}
+    };
+
+    function parseUTC(str) {
+      const [y,m,d] = str.split('-').map(Number);
+      return Date.UTC(y, m - 1, d, 12, 0, 0);
+    }
+    function fmtDate(y, m, d) {
+      return y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    }
+    function isWorkNight(dateStr, offset = 0) {
+      const diff = Math.round((parseUTC(dateStr) - REF_UTC) / MS_DAY) - offset;
+      const idx = ((diff % 6) + 6) % 6;
+      return idx === 0 || idx === 1;
+    }
+
+    async function loadFromSupabase() {
+      if (!supabaseClient) return;
+      const { data: profs } = await supabaseClient.from('profiles').select('*');
+      if (profs && profs.length) {
+        profs.forEach(p => {
+          state.profiles[p.id] = {
+            id: p.id, name: p.name, color: p.color,
+            cycleOffset: p.cycle_offset,
+            canApproveVacations: p.can_approve_vacations,
+            canEditOverrides: p.can_edit_overrides
+          };
+        });
+      }
+      const { data: vacs } = await supabaseClient.from('vacations').select('*').order('created_at', { ascending: false });
+      if (vacs) {
+        state.vacations = vacs.map(v => ({
+          id: v.id, userId: v.user_id, startDate: v.start_date, endDate: v.end_date,
+          type: v.type, comment: v.comment, status: v.status, workNightsAffected: v.work_nights_affected
+        }));
+      }
+      const { data: ovrs } = await supabaseClient.from('shift_overrides').select('*').order('date', { ascending: false });
+      if (ovrs) {
+        state.overrides = ovrs.map(o => ({
+          id: o.id, date: o.date, userId: o.user_id, targetType: o.target_type,
+          note: o.note, createdBy: o.created_by, createdAt: o.created_at
+        }));
+      }
+      render();
+    }
+
+    if (supabaseClient) {
+      loadFromSupabase();
+      supabaseClient.channel('realtime-turnos')
+        .on('postgres_changes', { event: '*', schema: 'public' }, () => loadFromSupabase())
+        .subscribe();
+    }
+
+    function getStatus(uid, dateStr) {
+      const p = state.profiles[uid];
+      const base = isWorkNight(dateStr, p.cycleOffset || 0);
+      const ovr = state.overrides.find(o => o.date === dateStr && o.userId === uid);
+      const vac = state.vacations.find(v => v.userId === uid && dateStr >= v.startDate && dateStr <= v.endDate && v.status !== 'rechazada');
+      let working = ovr ? ovr.targetType === 'trabaja' : base;
+      if (vac && vac.status === 'aprobada') working = false;
+      return { working, ovr, vac };
+    }
+
+    window.changeMonth = (delta) => {
+      state.month += delta;
+      if (state.month < 0) { state.month = 11; state.year--; }
+      if (state.month > 11) { state.month = 0; state.year++; }
+      render();
+    };
+    window.selectDay = (dStr) => { state.selectedDate = dStr; render(); };
+    window.setUser = (u) => { state.activeUser = u; render(); };
+    window.saveSbConfig = () => {
+      const u = document.getElementById('sb_u').value.trim();
+      const k = document.getElementById('sb_k').value.trim();
+      localStorage.setItem('sb_url', u);
+      localStorage.setItem('sb_key', k);
+      location.reload();
+    };
+
+    function render() {
+      const firstDay = new Date(Date.UTC(state.year, state.month, 1));
+      const startW = (firstDay.getUTCDay() + 6) % 7;
+      const totalDays = new Date(Date.UTC(state.year, state.month + 1, 0)).getUTCDate();
+      let cellsHtml = '';
+      for (let i = 0; i < startW; i++) cellsHtml += '<div class="h-20 rounded-xl bg-slate-950/40"></div>';
+      for (let d = 1; d <= totalDays; d++) {
+        const dStr = fmtDate(state.year, state.month, d);
+        const sel = state.selectedDate === dStr ? 'ring-2 ring-blue-400 bg-slate-800' : 'bg-slate-900/80';
+        let badges = '';
+        ['user1','user2','user3'].forEach(uid => {
+          const st = getStatus(uid, dStr);
+          const p = state.profiles[uid];
+          const colorBg = uid === 'user1' ? 'bg-blue-600' : uid === 'user2' ? 'bg-emerald-600' : 'bg-amber-500 text-slate-950';
+          if (st.vac) {
+            badges += '<div class="text-[9px] px-1 rounded bg-purple-500/30 text-purple-200 truncate">' + p.name + ' (Vac)</div>';
+          } else if (st.working) {
+            badges += '<div class="text-[9px] px-1 rounded font-bold text-white truncate ' + colorBg + '">' + p.name + '</div>';
+          }
+        });
+        cellsHtml += '<button onclick="selectDay(\\'' + dStr + '\\')" class="h-20 p-1 rounded-xl border border-slate-800 flex flex-col justify-between text-left ' + sel + '"><span class="text-xs font-bold">' + d + '</span><div class="space-y-0.5 w-full">' + badges + '</div></button>';
+      }
+
+      document.getElementById('app').innerHTML = \`
+        <header class="p-3 bg-slate-900 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 class="font-bold text-base">🌙 Turnos Nocturnos 2-4</h1>
+            <p class="text-[11px] text-slate-400">Santos · Guerrero · Sergio</p>
+          </div>
+          <div class="flex gap-1">
+            \${['user1','user2','user3'].map(u => \`<button onclick="setUser('\${u}')" class="px-2.5 py-1 rounded-lg text-xs font-bold \${state.activeUser===u ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}">\${state.profiles[u].name}</button>\`).join('')}
+          </div>
+        </header>
+        <main class="max-w-3xl mx-auto p-3 space-y-4">
+          <div class="flex items-center justify-between bg-slate-900 p-3 rounded-2xl border border-slate-800">
+            <button onclick="changeMonth(-1)" class="px-3 py-1.5 bg-slate-800 rounded-xl font-bold">←</button>
+            <h2 class="font-bold text-base">\${MONTHS[state.month]} \${state.year}</h2>
+            <button onclick="changeMonth(1)" class="px-3 py-1.5 bg-slate-800 rounded-xl font-bold">→</button>
+          </div>
+          <div class="grid grid-cols-7 gap-1 text-center text-xs text-slate-400 font-bold">
+            \${WEEKDAYS.map(w => \`<div>\${w}</div>\`).join('')}
+          </div>
+          <div class="grid grid-cols-7 gap-1">\${cellsHtml}</div>
+          <div class="p-4 rounded-2xl bg-slate-900 border border-slate-800 space-y-2">
+            <h3 class="font-bold text-sm text-blue-400">Conexión en vivo con Supabase</h3>
+            <input id="sb_u" value="\${savedUrl || ''}" placeholder="Project URL (https://xxx.supabase.co)" class="w-full p-2 rounded-lg bg-slate-950 border border-slate-800 text-xs" />
+            <input id="sb_k" value="\${savedKey || ''}" placeholder="anon public key" class="w-full p-2 rounded-lg bg-slate-950 border border-slate-800 text-xs" />
+            <button onclick="saveSbConfig()" class="w-full py-2 bg-blue-600 rounded-xl text-xs font-bold">Guardar y Conectar</button>
+          </div>
+        </main>
+      \`;
+    }
+    render();
+  </script>
+</body>
+</html>`;
+  };
+
+  const handleCopyOrShareHtml = async () => {
+    const htmlContent = getStandaloneHtmlString();
+    try {
+      await navigator.clipboard.writeText(htmlContent);
+      setCopiedId('html-full');
+      showToast('¡Código HTML completo copiado! Ya puedes pegarlo en GitHub o en un archivo.', 'success');
+      setTimeout(() => setCopiedId(null), 4000);
+    } catch {
+      showToast('Selecciona el texto del recuadro inferior y cópialo.', 'info');
+    }
+  };
+
+  const SUPABASE_SQL_SCRIPT = `-- 1. Crear tabla de perfiles de los 3 trabajadores
+create table public.profiles (
+  id text primary key,
+  name text not null,
+  color text not null default 'blue',
+  cycle_offset integer not null default 0,
+  can_approve_vacations boolean not null default false,
+  can_edit_overrides boolean not null default true,
+  updated_at timestamp with time zone default now()
+);
+
+-- Insertar los 3 perfiles iniciales
+insert into public.profiles (id, name, color, cycle_offset, can_approve_vacations, can_edit_overrides)
+values
+  ('user1', 'Santos', 'blue', 0, true, true),
+  ('user2', 'Guerrero', 'green', 0, false, true),
+  ('user3', 'Sergio', 'orange', 0, false, true);
+
+-- 2. Crear tabla de solicitudes de vacaciones y asuntos propios
+create table public.vacations (
+  id uuid primary key default gen_random_uuid(),
+  user_id text references public.profiles(id) not null,
+  start_date date not null,
+  end_date date not null,
+  type text not null check (type in ('vacaciones', 'asuntos_propios')),
+  comment text default '',
+  status text not null default 'pendiente' check (status in ('pendiente', 'aprobada', 'rechazada')),
+  work_nights_affected integer not null default 0,
+  reviewed_by text references public.profiles(id),
+  reviewed_at timestamp with time zone,
+  created_at timestamp with time zone default now()
+);
+
+-- 3. Crear tabla de cambios excepcionales de turno
+create table public.shift_overrides (
+  id uuid primary key default gen_random_uuid(),
+  date date not null,
+  user_id text references public.profiles(id) not null,
+  target_type text not null check (target_type in ('trabaja', 'libre')),
+  swapped_with_user_id text references public.profiles(id),
+  note text default '',
+  created_by text references public.profiles(id) not null,
+  created_at timestamp with time zone default now()
+);
+
+-- 4. Activar Row Level Security (RLS) y Sincronización Realtime
+alter table public.profiles enable row level security;
+alter table public.vacations enable row level security;
+alter table public.shift_overrides enable row level security;
+
+create policy "Acceso autenticado a perfiles" on public.profiles
+  for all to authenticated using (true) with check (true);
+
+create policy "Acceso autenticado a vacaciones" on public.vacations
+  for all to authenticated using (true) with check (true);
+
+create policy "Acceso autenticado a cambios" on public.shift_overrides
+  for all to authenticated using (true) with check (true);
+
+alter publication supabase_realtime add table public.profiles;
+alter publication supabase_realtime add table public.vacations;
+alter publication supabase_realtime add table public.shift_overrides;`;
+
+  const PWA_MANIFEST_JSON = `{
+  "short_name": "Turnos 2-4",
+  "name": "Gestor de Turnos Nocturnos 2-4",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "display": "standalone",
+  "orientation": "portrait"
+}`;
+
+  const activeProfile = profiles[activeUser];
+  const pendingCount = vacations.filter((v) => v.status === 'pendiente').length;
+
+  return (
+    <div className="min-h-screen bg-[#090d16] text-slate-100 flex flex-col font-sans selection:bg-blue-500 selection:text-white pb-24 md:pb-8">
+      {/* Notificación flotante */}
+      {toast && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] px-4 py-3 rounded-xl shadow-2xl border backdrop-blur-md flex items-center gap-3 animate-fade-in bg-slate-900/95 border-slate-700 text-sm">
+          {toast.type === 'success' && <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />}
+          {toast.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />}
+          {toast.type === 'info' && <Info className="w-5 h-5 text-blue-400 shrink-0" />}
+          <span className="font-medium text-slate-100">{toast.text}</span>
+        </div>
+      )}
+
+      {/* Cabecera Superior */}
+      <header className="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/80 px-3 sm:px-6 py-3">
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+                <Moon className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-base sm:text-lg font-bold tracking-tight text-white">Turnos Nocturnos 2-4</h1>
+                  <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    {syncStatus === 'sincronizado' ? 'En vivo' : 'Conectado'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400">2 noches trabajo · 4 libres · Ref: 16 oct 2026</p>
+              </div>
+            </div>
+
+            {/* Botón rápido en móvil para ir a la guía de publicación */}
+            <button
+              onClick={() => setActiveTab('despliegue')}
+              className="sm:hidden inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-200 border border-slate-700"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-blue-400" />
+              Publicar / SQL
+            </button>
+          </div>
+
+          {/* Selector rápido de "Quién soy ahora" para probar los 3 perfiles */}
+          <div className="flex items-center gap-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 overflow-x-auto">
+            <span className="text-[11px] text-slate-400 px-2 hidden md:inline">Sesión activa:</span>
+            {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => {
+              const p = profiles[uid];
+              const theme = COLOR_THEMES[p.color];
+              const isSelected = activeUser === uid;
+              return (
+                <button
+                  key={uid}
+                  onClick={() => {
+                    setActiveUser(uid);
+                    setOvrUser(uid);
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex-1 sm:flex-initial justify-center whitespace-nowrap ${
+                    isSelected
+                      ? `${theme.bg} text-white shadow-md`
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${isSelected ? 'bg-white' : theme.dot}`} />
+                  <span>{p.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </header>
+
+      {/* Navegación Desktop / Tablet */}
+      <div className="max-w-5xl w-full mx-auto px-3 sm:px-6 pt-3 hidden md:block">
+        <div className="flex items-center gap-2 bg-slate-900/70 p-1.5 rounded-2xl border border-slate-800/80">
+          {[
+            { id: 'calendario', label: 'Calendario Mensual', icon: CalendarIcon },
+            { id: 'anual', label: 'Vista Anual', icon: Grid },
+            { id: 'vacaciones', label: 'Vacaciones y Permisos', icon: Palmtree, badge: pendingCount },
+            { id: 'cambios', label: 'Cambios de Turno', icon: ArrowLeftRight, badge: overrides.length },
+            { id: 'ajustes', label: 'Perfiles y Ciclo', icon: Settings },
+            { id: 'despliegue', label: 'Supabase SQL y Móvil', icon: Code2 }
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as typeof activeTab)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold transition-all ${
+                  active
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{tab.label}</span>
+                {tab.badge ? (
+                  <span className={`px-1.5 py-0.2 rounded-full text-[10px] ${active ? 'bg-white text-blue-700' : 'bg-slate-800 text-slate-300'}`}>
+                    {tab.badge}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Contenido Principal */}
+      <main className="max-w-5xl w-full mx-auto px-3 sm:px-6 py-4 flex-1 space-y-5">
+        {}
+        {activeTab === 'calendario' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Columna izquierda: Calendario Mensual */}
+            <div className="lg:col-span-8 bg-slate-900/70 border border-slate-800/90 rounded-2xl p-3 sm:p-5 shadow-xl">
+              {/* Controles de Mes y Filtros */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+                <div className="flex items-center justify-between sm:justify-start gap-2">
+                  <button
+                    onClick={goToPrevMonth}
+                    className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                    title="Mes anterior"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <div className="text-center min-w-[150px]">
+                    <h2 className="text-base sm:text-lg font-bold text-white">
+                      {MONTH_NAMES[currentMonth]} {currentYear}
+                    </h2>
+                  </div>
+                  <button
+                    onClick={goToNextMonth}
+                    className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                    title="Mes siguiente"
+                  >
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => goToTodayOrReference('hoy')}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+                  >
+                    Hoy
+                  </button>
+                  <button
+                    onClick={() => goToTodayOrReference('ref')}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 border border-blue-500/30"
+                  >
+                    Ref: 16 Oct 26
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('anual')}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 md:hidden"
+                  >
+                    Vista Anual
+                  </button>
+                </div>
+              </div>
+
+              {/* Filtro rápido por trabajador */}
+              <div className="flex items-center justify-between gap-2 py-3 flex-wrap">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <button
+                    onClick={() => setFilterWorker('all')}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                      filterWorker === 'all'
+                        ? 'bg-slate-100 text-slate-900 border-white'
+                        : 'bg-slate-800/60 text-slate-400 border-slate-700/70'
+                    }`}
+                  >
+                    Ver los 3
+                  </button>
+                  {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => {
+                    const p = profiles[uid];
+                    const t = COLOR_THEMES[p.color];
+                    const active = filterWorker === uid;
+                    return (
+                      <button
+                        key={uid}
+                        onClick={() => setFilterWorker(uid)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition ${
+                          active ? `${t.badge} ring-1 ring-current` : 'bg-slate-800/40 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        <span className={`w-2 h-2 rounded-full ${t.dot}`} />
+                        <span>{p.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Cabecera de días de la semana */}
+              <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center mb-1.5">
+                {WEEKDAYS_SHORT.map((w, idx) => (
+                  <div
+                    key={w}
+                    className={`text-[11px] font-semibold py-1 ${
+                      idx >= 5 ? 'text-amber-400/80' : 'text-slate-400'
+                    }`}
+                  >
+                    {w}
+                  </div>
+                ))}
+              </div>
+
+              {/* Cuadrícula del mes */}
+              <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                {calendarDays.map((cell, i) => {
+                  if (!cell.dateStr || !cell.dayNum) {
+                    return <div key={`empty-${i}`} className="h-20 sm:h-24 rounded-xl bg-slate-950/30 border border-slate-900/40" />;
+                  }
+
+                  const isSelected = selectedDate === cell.dateStr;
+                  const isRefDate = cell.dateStr === '2026-10-16';
+                  const workersToRender: UserId[] =
+                    filterWorker === 'all' ? ['user1', 'user2', 'user3'] : [filterWorker];
+
+                  return (
+                    <button
+                      key={cell.dateStr}
+                      onClick={() => {
+                        setSelectedDate(cell.dateStr!);
+                        setOvrDate(cell.dateStr!);
+                      }}
+                      className={`h-20 sm:h-24 rounded-xl p-1 sm:p-1.5 flex flex-col justify-between text-left transition-all border relative overflow-hidden ${
+                        isSelected
+                          ? 'bg-slate-800/90 border-blue-400 ring-2 ring-blue-500/40'
+                          : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80'
+                      }`}
+                    >
+                      {/* Fila superior: Número de día e indicador de referencia */}
+                      <div className="flex items-center justify-between w-full">
+                        <span
+                          className={`text-xs sm:text-sm font-bold leading-none ${
+                            isSelected ? 'text-white' : 'text-slate-300'
+                          }`}
+                        >
+                          {cell.dayNum}
+                        </span>
+                        {isRefDate && (
+                          <span className="text-[9px] px-1 rounded bg-blue-500/30 text-blue-300 font-semibold">
+                            Ref
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Filas de estado de los trabajadores en esa noche */}
+                      <div className="space-y-1 w-full">
+                        {workersToRender.map((uid) => {
+                          const st = getWorkerDayStatus(uid, cell.dateStr!);
+                          const p = profiles[uid];
+                          const theme = COLOR_THEMES[p.color];
+
+                          // Vacaciones aprobadas
+                          if (st.approvedVacation) {
+                            return (
+                              <div
+                                key={uid}
+                                className={`w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between border border-dashed ${theme.badge}`}
+                              >
+                                <span className="truncate">{p.name.split(' ')[0]}</span>
+                                <Palmtree className="w-2.5 h-2.5 shrink-0" />
+                              </div>
+                            );
+                          }
+
+                          // Vacaciones pendientes
+                          if (st.pendingVacation) {
+                            return (
+                              <div
+                                key={uid}
+                                className="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between bg-amber-500/15 text-amber-300 border border-dotted border-amber-400/60"
+                              >
+                                <span className="truncate">{p.name.split(' ')[0]}?</span>
+                                <Clock className="w-2.5 h-2.5 shrink-0" />
+                              </div>
+                            );
+                          }
+
+                          // Noche de trabajo (Normal o por Cambio Excepcional)
+                          if (st.effectiveWorking) {
+                            return (
+                              <div
+                                key={uid}
+                                className={`w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold truncate flex items-center justify-between text-white ${theme.bg} ${
+                                  st.override ? 'ring-1 ring-amber-300' : ''
+                                }`}
+                              >
+                                <span className="truncate">{p.name.split(' ')[0]}</span>
+                                {st.override ? (
+                                  <ArrowLeftRight className="w-2.5 h-2.5 shrink-0 text-amber-200" />
+                                ) : (
+                                  <Moon className="w-2.5 h-2.5 shrink-0 opacity-90" />
+                                )}
+                              </div>
+                            );
+                          }
+
+                          // Noche Libre (pero si tuvo un cambio puntual a libre o se filtra 1 usuario, lo mostramos claro)
+                          if (st.override) {
+                            return (
+                              <div
+                                key={uid}
+                                className="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between bg-slate-800 text-slate-300 border border-amber-400/50"
+                              >
+                                <span className="truncate line-through opacity-75">{p.name.split(' ')[0]}</span>
+                                <span className="text-[8px] text-amber-300 font-bold">LIB</span>
+                              </div>
+                            );
+                          }
+
+                          if (filterWorker !== 'all') {
+                            return (
+                              <div
+                                key={uid}
+                                className="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] text-slate-400 bg-slate-900/90 border border-slate-800 flex items-center justify-between"
+                              >
+                                <span>Libre</span>
+                                <Sun className="w-2.5 h-2.5 text-slate-400" />
+                              </div>
+                            );
+                          }
+
+                          return null;
+                        })}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Leyenda visual */}
+              <div className="mt-4 pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-3 text-xs text-slate-400">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-blue-600 inline-block" />
+                  <span>Noche trabajada</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-slate-900 border border-slate-700 inline-block" />
+                  <span>Noche libre</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-emerald-500/20 border border-dashed border-emerald-400 inline-block" />
+                  <span>Vacaciones aprobadas</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-3 h-3 rounded bg-amber-500/20 border border-dotted border-amber-400 inline-block" />
+                  <span>Vacaciones pendientes</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <ArrowLeftRight className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Cambio puntual</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Columna derecha: Detalle de la Noche Seleccionada y Acciones Rápidas */}
+            <div className="lg:col-span-4 space-y-4">
+              <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wider text-blue-400 font-semibold">
+                      Detalle de la noche
+                    </span>
+                    <h3 className="text-lg font-bold text-white">{formatHumanDate(selectedDate)}</h3>
+                  </div>
+                  <div className="px-2.5 py-1 rounded-lg bg-slate-800 text-xs text-slate-300 border border-slate-700">
+                    Noche inicia 22:00h
+                  </div>
+                </div>
+
+                {/* Estado de los 3 compañeros en la fecha seleccionada */}
+                <div className="space-y-3">
+                  {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => {
+                    const p = profiles[uid];
+                    const theme = COLOR_THEMES[p.color];
+                    const st = getWorkerDayStatus(uid, selectedDate);
+
+                    return (
+                      <div
+                        key={uid}
+                        className={`p-3 rounded-xl border transition ${
+                          st.effectiveWorking
+                            ? `${theme.bgSoft} ${theme.border}`
+                            : 'bg-slate-950/60 border-slate-800/80'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-3 h-3 rounded-full ${theme.dot}`} />
+                            <span className="font-semibold text-sm text-white">{p.name}</span>
+                          </div>
+                          <span className="text-[11px] text-slate-400">
+                            Día {st.cycleDay}/6 del ciclo
+                          </span>
+                        </div>
+
+                        <div className="mt-2 flex items-center justify-between text-xs">
+                          <div>
+                            {st.approvedVacation ? (
+                              <span className="inline-flex items-center gap-1 text-emerald-300 font-medium">
+                                <Palmtree className="w-3.5 h-3.5" />
+                                Permiso aprobado ({st.approvedVacation.type === 'vacaciones' ? 'Vacaciones' : 'Asuntos propios'})
+                              </span>
+                            ) : st.effectiveWorking ? (
+                              <span className="inline-flex items-center gap-1.5 text-white font-semibold">
+                                <Moon className="w-3.5 h-3.5 text-blue-300" />
+                                TRABAJA ESTA NOCHE
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 text-slate-400">
+                                <Sun className="w-3.5 h-3.5 text-slate-400" />
+                                Noche Libre
+                              </span>
+                            )}
+                          </div>
+
+                          {st.override && (
+                            <button
+                              onClick={() => handleRevertOverride(st.override!.id)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 text-[11px]"
+                              title="Revertir al turno automático"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              Revertir
+                            </button>
+                          )}
+                        </div>
+
+                        {st.override && (
+                          <p className="mt-1.5 text-[11px] text-amber-300/90 bg-amber-950/40 px-2 py-1 rounded border border-amber-500/20">
+                            Cambio puntual: {st.override.note} (por {profiles[st.override.createdBy]?.name})
+                          </p>
+                        )}
+
+                        {st.pendingVacation && (
+                          <p className="mt-1.5 text-[11px] text-amber-300 bg-amber-950/40 px-2 py-1 rounded border border-amber-500/20">
+                            Solicitud pendiente de aprobación ({st.pendingVacation.type})
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Botones de acción directa para la fecha seleccionada */}
+                <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => {
+                      setVacStart(selectedDate);
+                      setVacEnd(selectedDate);
+                      setActiveTab('vacaciones');
+                    }}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 transition"
+                  >
+                    <Palmtree className="w-4 h-4" />
+                    Pedir Vacaciones
+                  </button>
+                  <button
+                    onClick={() => {
+                      setOvrDate(selectedDate);
+                      setActiveTab('cambios');
+                    }}
+                    className="flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition"
+                  >
+                    <ArrowLeftRight className="w-4 h-4" />
+                    Cambiar Turno
+                  </button>
+                </div>
+              </div>
+
+              {/* Comprobador oficial del patrón solicitado en el prompt */}
+              <div className="bg-slate-900/50 border border-slate-800/80 rounded-2xl p-4 text-xs space-y-2">
+                <div className="flex items-center gap-2 text-blue-400 font-semibold">
+                  <Sparkles className="w-4 h-4" />
+                  <span>Verificación del Patrón 2-4 (Octubre 2026)</span>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  Ciclo calculado desde el <strong>16 de octubre de 2026</strong>:
+                </p>
+                <ul className="space-y-1 text-slate-300">
+                  <li>• <strong>16 y 17 oct:</strong> Trabajo (Días 1 y 2)</li>
+                  <li>• <strong>18, 19, 20 y 21 oct:</strong> Libre (Días 3, 4, 5 y 6)</li>
+                  <li>• <strong>22 y 23 oct:</strong> Trabajo (Días 1 y 2)</li>
+                  <li>• <strong>24, 25, 26 y 27 oct:</strong> Libre (Días 3, 4, 5 y 6)</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'anual' && (
+          <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-6 shadow-xl space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h2 className="text-lg font-bold text-white">Vista Anual {currentYear}</h2>
+                <p className="text-xs text-slate-400">
+                  Pulsa cualquier mes para abrirlo en detalle. Selecciona un compañero para ver su año completo de un vistazo.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setCurrentYear((y) => y - 1)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold"
+                >
+                  ← {currentYear - 1}
+                </button>
+                <span className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-bold">
+                  {currentYear}
+                </span>
+                <button
+                  onClick={() => setCurrentYear((y) => y + 1)}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold"
+                >
+                  {currentYear + 1} →
+                </button>
+              </div>
+            </div>
+
+            {/* Selector de usuario para colorear la vista anual */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-slate-400">Mostrar calendario anual de:</span>
+              {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => {
+                const p = profiles[uid];
+                const t = COLOR_THEMES[p.color];
+                const selected = (filterWorker === 'all' ? activeUser : filterWorker) === uid;
+                return (
+                  <button
+                    key={uid}
+                    onClick={() => setFilterWorker(uid)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                      selected ? `${t.bg} text-white border-transparent` : 'bg-slate-800 text-slate-300 border-slate-700'
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {MONTH_NAMES.map((mName, mIdx) => {
+                const firstDay = new Date(Date.UTC(currentYear, mIdx, 1));
+                const offset = (firstDay.getUTCDay() + 6) % 7;
+                const totalDays = new Date(Date.UTC(currentYear, mIdx + 1, 0)).getUTCDate();
+                const targetUid: UserId = filterWorker === 'all' ? activeUser : filterWorker;
+                const theme = COLOR_THEMES[profiles[targetUid].color];
+
+                const miniCells: Array<number | null> = [];
+                for (let i = 0; i < offset; i++) miniCells.push(null);
+                for (let d = 1; d <= totalDays; d++) miniCells.push(d);
+
+                return (
+                  <div
+                    key={mName}
+                    onClick={() => {
+                      setCurrentMonth(mIdx);
+                      setActiveTab('calendario');
+                    }}
+                    className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 hover:border-blue-500/50 cursor-pointer transition"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-sm font-bold text-white">{mName}</h4>
+                      <span className="text-[10px] text-slate-400">Ver mes →</span>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 text-center text-[9px] text-slate-400 mb-1">
+                      {WEEKDAYS_SHORT.map((w) => (
+                        <span key={w}>{w}</span>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-7 gap-1">
+                      {miniCells.map((d, idx) => {
+                        if (!d) return <div key={idx} className="h-5" />;
+                        const dStr = formatDateStr(currentYear, mIdx, d);
+                        const st = getWorkerDayStatus(targetUid, dStr);
+                        let cellClass = 'bg-slate-900 text-slate-400';
+                        if (st.approvedVacation) {
+                          cellClass = 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50';
+                        } else if (st.effectiveWorking) {
+                          cellClass = `${theme.bg} text-white font-bold`;
+                        }
+                        return (
+                          <div
+                            key={idx}
+                            className={`h-5 rounded flex items-center justify-center text-[10px] ${cellClass}`}
+                          >
+                            {d}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'vacaciones' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Formulario para solicitar o editar vacaciones */}
+            <div className="lg:col-span-5 bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    {editingVacationId ? 'Modificar Solicitud' : 'Solicitar Vacaciones / Permiso'}
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Solicitando como: <strong className="text-slate-200">{activeProfile.name}</strong>
+                  </p>
+                </div>
+                <Palmtree className="w-5 h-5 text-emerald-400" />
+              </div>
+
+              <form onSubmit={handleSaveVacation} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1 font-medium">Fecha inicio</label>
+                    <input
+                      type="date"
+                      value={vacStart}
+                      onChange={(e) => setVacStart(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1 font-medium">Fecha fin (incluida)</label>
+                    <input
+                      type="date"
+                      value={vacEnd}
+                      onChange={(e) => setVacEnd(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-medium">Tipo de permiso</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setVacType('vacaciones')}
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
+                        vacType === 'vacaciones'
+                          ? 'bg-emerald-600 text-white border-emerald-500'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      🏖️ Vacaciones
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVacType('asuntos_propios')}
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
+                        vacType === 'asuntos_propios'
+                          ? 'bg-blue-600 text-white border-blue-500'
+                          : 'bg-slate-950 text-slate-400 border-slate-800'
+                      }`}
+                    >
+                      📋 Asuntos Propios
+                    </button>
+                  </div>
+                </div>
+
+                {/* Aviso automático si coincide con noches de trabajo */}
+                <div
+                  className={`p-3 rounded-xl border text-xs ${
+                    vacWorkNightsPreview.affectedDates.length > 0
+                      ? 'bg-amber-500/15 border-amber-500/40 text-amber-200'
+                      : 'bg-slate-950/70 border-slate-800 text-slate-300'
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle
+                      className={`w-4 h-4 shrink-0 mt-0.5 ${
+                        vacWorkNightsPreview.affectedDates.length > 0 ? 'text-amber-400' : 'text-slate-400'
+                      }`}
+                    />
+                    <div>
+                      <p className="font-semibold">
+                        {vacWorkNightsPreview.affectedDates.length > 0
+                          ? `Aviso: Coincide con ${vacWorkNightsPreview.affectedDates.length} noche(s) de trabajo`
+                          : 'No coincide con ninguna noche de trabajo programada'}
+                      </p>
+                      {vacWorkNightsPreview.affectedDates.length > 0 && (
+                        <p className="text-[11px] opacity-90 mt-1">
+                          Noches afectadas: {vacWorkNightsPreview.affectedDates.map(formatHumanDate).join(', ')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-medium">Comentario opcional</label>
+                  <textarea
+                    rows={2}
+                    value={vacComment}
+                    onChange={(e) => setVacComment(e.target.value)}
+                    placeholder="Ej: Viaje familiar, necesito confirmar antes del viernes..."
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-semibold shadow-lg shadow-blue-600/20 transition"
+                  >
+                    {editingVacationId ? 'Guardar Cambios' : 'Enviar Solicitud (Pendiente)'}
+                  </button>
+                  {editingVacationId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingVacationId(null);
+                        setVacComment('');
+                      }}
+                      className="py-2.5 px-3 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* Listado compartido de solicitudes de los 3 compañeros */}
+            <div className="lg:col-span-7 bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    Solicitudes del Equipo ({vacations.length})
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Visibles en tiempo real para los tres compañeros. No se aprueban automáticamente.
+                  </p>
+                </div>
+                <div className="text-xs">
+                  {activeProfile.canApproveVacations ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                      <UserCheck className="w-3.5 h-3.5" />
+                      Tienes permiso para aprobar
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 border border-slate-700">
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Modo consulta (Aprobador: {
+                        (Object.values(profiles) as WorkerProfile[])
+                          .filter((p) => p.canApproveVacations)
+                          .map((p) => p.name.split(' ')[0])
+                          .join(', ') || 'Ninguno'
+                      })
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {vacations.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-sm">
+                  Todavía no hay solicitudes de vacaciones registradas.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {vacations.map((v) => {
+                    const reqUser = profiles[v.userId] || DEFAULT_PROFILES.user1;
+                    const theme = COLOR_THEMES[reqUser.color];
+                    const isMine = v.userId === activeUser;
+
+                    return (
+                      <div
+                        key={v.id}
+                        className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className={`px-2 py-0.5 rounded-md text-xs font-semibold border ${theme.badge}`}>
+                              {reqUser.name}
+                            </span>
+                            <span className="text-xs font-semibold text-white">
+                              {formatHumanDate(v.startDate)} → {formatHumanDate(v.endDate)}
+                            </span>
+                            <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                              {v.type === 'vacaciones' ? 'Vacaciones' : 'Asuntos Propios'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-3 text-[11px] text-slate-400 flex-wrap">
+                            <span>
+                              Noches de trabajo afectadas: <strong className="text-amber-300">{v.workNightsAffected}</strong>
+                            </span>
+                            {v.reviewedBy && (
+                              <span>
+                                Revisado por: <strong>{profiles[v.reviewedBy]?.name}</strong>
+                              </span>
+                            )}
+                          </div>
+
+                          {v.comment && (
+                            <p className="text-xs text-slate-300 italic bg-slate-900/90 px-2.5 py-1.5 rounded-lg border border-slate-800">
+                              "{v.comment}"
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap sm:flex-col items-end justify-between gap-2 shrink-0">
+                          {/* Estado actual */}
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wide flex items-center gap-1 ${
+                              v.status === 'aprobada'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                                : v.status === 'rechazada'
+                                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            }`}
+                          >
+                            {v.status === 'aprobada' && <CheckCircle2 className="w-3 h-3" />}
+                            {v.status === 'rechazada' && <XCircle className="w-3 h-3" />}
+                            {v.status === 'pendiente' && <Clock className="w-3 h-3" />}
+                            {v.status}
+                          </span>
+
+                          {/* Botones de acción (Aprobar/Rechazar si tiene permiso, Editar/Borrar si es propia) */}
+                          <div className="flex items-center gap-1.5">
+                            {activeProfile.canApproveVacations && v.status === 'pendiente' && (
+                              <>
+                                <button
+                                  onClick={() => handleReviewVacation(v.id, 'aprobada')}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"
+                                >
+                                  Aprobar
+                                </button>
+                                <button
+                                  onClick={() => handleReviewVacation(v.id, 'rechazada')}
+                                  className="px-2.5 py-1 rounded-lg bg-rose-600/80 hover:bg-rose-600 text-white text-xs font-semibold"
+                                >
+                                  Rechazar
+                                </button>
+                              </>
+                            )}
+
+                            {isMine && (
+                              <button
+                                onClick={() => {
+                                  setEditingVacationId(v.id);
+                                  setVacStart(v.startDate);
+                                  setVacEnd(v.endDate);
+                                  setVacType(v.type);
+                                  setVacComment(v.comment);
+                                }}
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs"
+                              >
+                                Editar
+                              </button>
+                            )}
+
+                            {(isMine || activeProfile.canApproveVacations) && (
+                              <button
+                                onClick={() => handleDeleteVacation(v)}
+                                className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-rose-900/60 text-slate-400 hover:text-rose-200 text-xs"
+                              >
+                                Borrar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'cambios' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-5 bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl h-fit">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                <div>
+                  <h2 className="text-base sm:text-lg font-bold text-white">Registrar Cambio Excepcional</h2>
+                  <p className="text-xs text-slate-400">
+                    Modifica una fecha concreta o intercambia guardia sin alterar el patrón futuro.
+                  </p>
+                </div>
+                <ArrowLeftRight className="w-5 h-5 text-amber-400" />
+              </div>
+
+              <form onSubmit={handleCreateOverride} className="space-y-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setOvrMode('puntual')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
+                      ovrMode === 'puntual'
+                        ? 'bg-amber-500 text-slate-950 border-amber-400'
+                        : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    Cambio Puntual
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOvrMode('intercambio')}
+                    className={`py-2 px-3 rounded-xl text-xs font-semibold border transition ${
+                      ovrMode === 'intercambio'
+                        ? 'bg-amber-500 text-slate-950 border-amber-400'
+                        : 'bg-slate-950 text-slate-400 border-slate-800'
+                    }`}
+                  >
+                    Intercambiar Turno
+                  </button>
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-medium">Fecha de la noche</label>
+                  <input
+                    type="date"
+                    value={ovrDate}
+                    onChange={(e) => setOvrDate(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-medium">Trabajador</label>
+                  <select
+                    value={ovrUser}
+                    onChange={(e) => setOvrUser(e.target.value as UserId)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                  >
+                    {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => (
+                      <option key={uid} value={uid}>
+                        {profiles[uid].name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {ovrMode === 'puntual' ? (
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1 font-medium">Nuevo estado para esa noche</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setOvrTargetStatus('trabaja')}
+                        className={`py-2 px-3 rounded-xl text-xs font-semibold border ${
+                          ovrTargetStatus === 'trabaja'
+                            ? 'bg-blue-600 text-white border-blue-500'
+                            : 'bg-slate-950 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        🌙 Pasa a Trabajar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setOvrTargetStatus('libre')}
+                        className={`py-2 px-3 rounded-xl text-xs font-semibold border ${
+                          ovrTargetStatus === 'libre'
+                            ? 'bg-slate-700 text-white border-slate-500'
+                            : 'bg-slate-950 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        ☀️ Pasa a Librar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs text-slate-300 mb-1 font-medium">Intercambiar guardia con</label>
+                    <select
+                      value={ovrSwapPartner}
+                      onChange={(e) => setOvrSwapPartner(e.target.value as UserId)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                    >
+                      {(['user1', 'user2', 'user3'] as UserId[])
+                        .filter((u) => u !== ovrUser)
+                        .map((uid) => (
+                          <option key={uid} value={uid}>
+                            {profiles[uid].name}
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-medium">Observaciones / Motivo</label>
+                  <input
+                    type="text"
+                    value={ovrNote}
+                    onChange={(e) => setOvrNote(e.target.value)}
+                    placeholder="Ej: Cubro guardia por cita médica..."
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-bold shadow-lg shadow-amber-500/20 transition"
+                >
+                  Guardar Cambio Excepcional
+                </button>
+              </form>
+            </div>
+
+            {/* Historial y auditoría de cambios con botón de reversión */}
+            <div className="lg:col-span-7 bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+              <div className="border-b border-slate-800 pb-3">
+                <h2 className="text-base sm:text-lg font-bold text-white">
+                  Registro de Cambios Puntuales ({overrides.length})
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Auditoría completa de quién realizó cada modificación y cuándo. Puedes revertir cualquier cambio para volver al cálculo automático.
+                </p>
+              </div>
+
+              {overrides.length === 0 ? (
+                <div className="text-center py-12 text-slate-400 text-sm">
+                  No hay cambios excepcionales registrados. Todos los días siguen el patrón 2-4 original.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {overrides.map((o) => {
+                    const worker = profiles[o.userId] || DEFAULT_PROFILES.user1;
+                    const author = profiles[o.createdBy] || DEFAULT_PROFILES.user1;
+                    const theme = COLOR_THEMES[worker.color];
+
+                    return (
+                      <div
+                        key={o.id}
+                        className="p-3.5 rounded-xl bg-slate-950/70 border border-slate-800 flex items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-white">{formatHumanDate(o.date)}</span>
+                            <span className={`px-2 py-0.5 rounded text-xs font-semibold border ${theme.badge}`}>
+                              {worker.name}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                                o.targetType === 'trabaja'
+                                  ? 'bg-blue-500/20 text-blue-300'
+                                  : 'bg-slate-800 text-slate-300'
+                              }`}
+                            >
+                              {o.targetType === 'trabaja' ? '🌙 TRABAJA' : '☀️ LIBRA'}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-300">{o.note}</p>
+                          <p className="text-[11px] text-slate-400">
+                            Registrado por <strong>{author.name}</strong> el{' '}
+                            {new Date(o.createdAt).toLocaleString('es-ES', {
+                              day: '2-digit',
+                              month: 'short',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={() => handleRevertOverride(o.id)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-950/80 text-slate-200 hover:text-rose-200 border border-slate-700 text-xs font-semibold shrink-0 transition"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          Revertir
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'ajustes' && (
+          <div className="space-y-5">
+            <div className="bg-slate-900/70 border border-slate-800/90 rounded-2xl p-4 sm:p-6 shadow-xl">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4 mb-5">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Configuración de los 3 Compañeros y Permisos</h2>
+                  <p className="text-xs text-slate-400">
+                    Personaliza el nombre, color, permisos de aprobación y si trabajáis las mismas noches o en turnos rotatorios escalonados.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => applyRotationPreset('simultaneo')}
+                    className="px-3 py-1.5 rounded-xl bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold"
+                  >
+                    Mismo turno los 3 (16-17 oct)
+                  </button>
+                  <button
+                    onClick={() => applyRotationPreset('escalonado')}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-semibold"
+                  >
+                    Escalonar cobertura 24/7 (0, +2, +4 días)
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {(['user1', 'user2', 'user3'] as UserId[]).map((uid) => {
+                  const p = profiles[uid];
+                  const theme = COLOR_THEMES[p.color];
+
+                  return (
+                    <div
+                      key={uid}
+                      className={`p-4 rounded-2xl bg-slate-950/70 border ${theme.border} space-y-4`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${theme.badge}`}>
+                          Perfil {uid.replace('user', '#')}
+                        </span>
+                        <span className={`w-3.5 h-3.5 rounded-full ${theme.dot}`} />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">Nombre del trabajador</label>
+                        <input
+                          type="text"
+                          value={p.name}
+                          onChange={(e) => handleUpdateProfile(uid, { name: e.target.value })}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white font-medium"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1.5">Color en el calendario</label>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {(Object.keys(COLOR_THEMES) as Array<WorkerProfile['color']>).map((cKey) => {
+                            const cObj = COLOR_THEMES[cKey];
+                            const selected = p.color === cKey;
+                            return (
+                              <button
+                                key={cKey}
+                                type="button"
+                                onClick={() => handleUpdateProfile(uid, { color: cKey })}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs border transition ${
+                                  selected
+                                    ? 'bg-slate-800 text-white border-white font-semibold'
+                                    : 'bg-slate-900/60 text-slate-400 border-slate-800'
+                                }`}
+                              >
+                                <span className={`w-2.5 h-2.5 rounded-full ${cObj.dot}`} />
+                                <span>{cObj.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">
+                          Inicio de su ciclo de 6 días (Octubre 2026)
+                        </label>
+                        <select
+                          value={p.cycleOffset}
+                          onChange={(e) => handleUpdateProfile(uid, { cycleOffset: Number(e.target.value) })}
+                          className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white"
+                        >
+                          <option value={0}>Trabaja 16 y 17 oct (Patrón Base)</option>
+                          <option value={1}>Trabaja 17 y 18 oct (+1 día)</option>
+                          <option value={2}>Trabaja 18 y 19 oct (+2 días)</option>
+                          <option value={3}>Trabaja 19 y 20 oct (+3 días)</option>
+                          <option value={4}>Trabaja 20 y 21 oct (+4 días)</option>
+                          <option value={5}>Trabaja 21 y 22 oct (+5 días)</option>
+                        </select>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800 space-y-2">
+                        <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer">
+                          <span>Puede aprobar vacaciones</span>
+                          <input
+                            type="checkbox"
+                            checked={p.canApproveVacations}
+                            onChange={(e) => handleUpdateProfile(uid, { canApproveVacations: e.target.checked })}
+                            className="w-4 h-4 accent-blue-500 rounded"
+                          />
+                        </label>
+                        <label className="flex items-center justify-between text-xs text-slate-300 cursor-pointer">
+                          <span>Puede registrar cambios de turno</span>
+                          <input
+                            type="checkbox"
+                            checked={p.canEditOverrides}
+                            onChange={(e) => handleUpdateProfile(uid, { canEditOverrides: e.target.checked })}
+                            className="w-4 h-4 accent-blue-500 rounded"
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {}
+        {activeTab === 'despliegue' && (
+          <div className="space-y-5">
+            {/* Tarjeta Paso a Paso especial para subir desde el móvil a Vercel */}
+            <div className="bg-gradient-to-br from-blue-950/80 to-slate-900 border border-blue-500/40 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <span className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/20 text-blue-300 border border-blue-400/30 mb-1">
+                    ESPECIAL DESDE EL MÓVIL
+                  </span>
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    Cómo subirla en tu pantalla actual de Vercel sin usar ordenador
+                  </h2>
+                  <p className="text-xs text-slate-300 mt-1">
+                    En la pantalla de Vercel que me acabas de enseñar, justo debajo de los botones dice: <em>«También puedes arrastrar y soltar tu proyecto, o elegir un <strong>archivo</strong> o una carpeta»</em>.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] text-slate-300 mb-1">
+                    Opcional: Tu URL de Supabase (puedes ponerla luego)
+                  </label>
+                  <input
+                    type="text"
+                    value={sbUrlInput}
+                    onChange={(e) => setSbUrlInput(e.target.value)}
+                    placeholder="https://xxxx.supabase.co"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950/90 border border-slate-700 text-xs text-white"
+                  />
+                </div>
+   
