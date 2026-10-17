@@ -1,3 +1,4 @@
+html
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -22,8 +23,10 @@
 </head>
 <body class="min-h-screen pb-24 md:pb-12 selection:bg-blue-500 selection:text-white">
 
+  <!-- Toast Container -->
   <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md pointer-events-none"></div>
 
+  <!-- App Root -->
   <div id="app"></div>
 
   <script>
@@ -68,6 +71,7 @@
       isSyncing: false
     };
 
+    // Cargar credenciales guardadas en localStorage si existen
     try {
       state.sbUrl = localStorage.getItem('turnos_sb_url') || '';
       state.sbKey = localStorage.getItem('turnos_sb_key') || '';
@@ -231,7 +235,7 @@
 
         saveLocalBackup();
       } catch (err) {
-        console.error('Error sincronizando datos:', err);
+        console.error('Error sincronizando:', err);
       } finally {
         state.isSyncing = false;
         render();
@@ -484,6 +488,4 @@
         const st = getWorkerDayStatus(uid, state.selectedDate);
         detailCardsHtml += `
           <div class="p-3 rounded-xl border ${st.effectiveWorking ? `${t.soft} ${t.border}` : 'bg-slate-950/60 border-slate-800'}">
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <s
+            <div class="f
