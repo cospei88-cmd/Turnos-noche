@@ -1,3 +1,4 @@
+html
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -29,7 +30,8 @@
   <div id="app"></div>
 
   <script>
-    const REFERENCE_UTC_MS = Date.UTC(2026, 9, 16, 12, 0, 0); // 16 Oct 2026 12:00 UTC
+    // Referencia exacta solicitada: 16 de Octubre de 2026 a las 12:00 UTC
+    const REFERENCE_UTC_MS = Date.UTC(2026, 9, 16, 12, 0, 0);
     const MS_PER_DAY = 86400000;
     const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     const WEEKDAYS_SHORT = ['L','M','X','J','V','S','D'];
@@ -70,7 +72,7 @@
       isSyncing: false
     };
 
-    // Cargar credenciales guardadas en localStorage si existen
+    // Restaurar estado guardado localmente si existe
     try {
       state.sbUrl = localStorage.getItem('turnos_sb_url') || '';
       state.sbKey = localStorage.getItem('turnos_sb_key') || '';
@@ -101,6 +103,7 @@
       return `${d} ${shortM[m - 1]} ${y}`;
     }
 
+    // Cálculo exacto del ciclo 2-4 (2 noches trabajo, 4 libres)
     function isBaseWorkNight(dateStr, cycleOffset = 0) {
       const targetMs = parseDateUTC(dateStr);
       const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
@@ -486,5 +489,4 @@
         const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
         const st = getWorkerDayStatus(uid, state.selectedDate);
         detailCardsHtml += `
-          <div class="p-3 rounded-xl border ${st.effectiveWorking ? `${t.soft} ${t.border}` : 'bg-slate-950/60 border-slate-800'}">
-            <div class="f
+          <div class="p-3 rounded-xl border ${st.eff
