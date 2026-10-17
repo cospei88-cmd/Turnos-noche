@@ -4,488 +4,371 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Turnos Nocturnos 2-4 | Santos, Guerrero y Sergio</title>
-  <meta name="theme-color" content="#090d16" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  
-  <!-- Tailwind CSS & Supabase SDK -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Inter', sans-serif; background-color: #090d16; color: #f1f5f9; }
-    ::-webkit-scrollbar { width: 5px; height: 5px; }
-    ::-webkit-scrollbar-track { background: #090d16; }
-    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
   </style>
 </head>
-<body class="min-h-screen pb-24 md:pb-12 selection:bg-blue-500 selection:text-white">
+<body class="min-h-screen pb-24 selection:bg-blue-500 selection:text-white">
+  <div id="toast" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[90%] max-w-md hidden">
+    <div id="toast-msg" class="px-4 py-3 rounded-xl border bg-slate-900 border-emerald-500 text-emerald-300 text-xs font-semibold shadow-2xl text-center"></div>
+  </div>
 
-  <!-- Toast Container -->
-  <div id="toast-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[92%] max-w-md pointer-events-none"></div>
-
-  <!-- App Root -->
   <div id="app"></div>
 
   <script>
-    // Referencia exacta solicitada: 16 de Octubre de 2026 a las 12:00 UTC
-    const REFERENCE_UTC_MS = Date.UTC(2026, 9, 16, 12, 0, 0);
-    const MS_PER_DAY = 86400000;
-    const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
-    const WEEKDAYS_SHORT = ['L','M','X','J','V','S','D'];
-
-    const COLOR_THEMES = {
-      blue:   { name: 'Azul',     bg: 'bg-blue-600',    soft: 'bg-blue-500/15',    border: 'border-blue-500/40',    badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',    dot: 'bg-blue-500' },
-      green:  { name: 'Verde',    bg: 'bg-emerald-600', soft: 'bg-emerald-500/15', border: 'border-emerald-500/40', badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40', dot: 'bg-emerald-500' },
-      orange: { name: 'Naranja',  bg: 'bg-amber-500',   soft: 'bg-amber-500/15',   border: 'border-amber-500/40',   badge: 'bg-amber-500/20 text-amber-300 border-amber-500/40',   dot: 'bg-amber-500' }
-    };
-
-    const DEFAULT_PROFILES = {
-      user1: { id: 'user1', name: 'Santos',   color: 'blue',   cycleOffset: 0, canApproveVacations: true,  canEditOverrides: true },
-      user2: { id: 'user2', name: 'Guerrero', color: 'green',  cycleOffset: 0, canApproveVacations: false, canEditOverrides: true },
-      user3: { id: 'user3', name: 'Sergio',   color: 'orange', cycleOffset: 0, canApproveVacations: false, canEditOverrides: true }
-    };
+    const REF_UTC = Date.UTC(2026, 9, 16, 12, 0, 0);
+    const MS_DAY = 86400000;
+    const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const WEEKDAYS = ['L','M','X','J','V','S','D'];
 
     let state = {
-      activeUser: 'user1',
-      activeTab: 'calendario',
-      currentYear: 2026,
-      currentMonth: 9, // Octubre
+      user: 'user1',
+      tab: 'cal',
+      year: 2026,
+      month: 9,
       selectedDate: '2026-10-16',
-      filterWorker: 'all',
-      profiles: JSON.parse(JSON.stringify(DEFAULT_PROFILES)),
+      filter: 'all',
+      profiles: {
+        user1: { name: 'Santos', color: 'blue', offset: 0 },
+        user2: { name: 'Guerrero', color: 'green', offset: 0 },
+        user3: { name: 'Sergio', color: 'orange', offset: 0 }
+      },
       vacations: [],
-      overrides: [],
-      vacStart: '2026-10-22',
-      vacEnd: '2026-10-25',
-      vacType: 'vacaciones',
-      vacComment: '',
-      ovrDate: '2026-10-16',
-      ovrUser: 'user1',
-      ovrTarget: 'libre',
-      ovrNote: '',
-      sbUrl: '',
-      sbKey: '',
-      sbConnected: false,
-      isSyncing: false
+      overrides: []
     };
 
-    // Restaurar estado guardado localmente si existe
     try {
-      state.sbUrl = localStorage.getItem('turnos_sb_url') || '';
-      state.sbKey = localStorage.getItem('turnos_sb_key') || '';
-      const savedLocal = localStorage.getItem('turnos_backup_state');
-      if (savedLocal) {
-        const parsed = JSON.parse(savedLocal);
-        if (parsed.profiles) state.profiles = parsed.profiles;
-        if (parsed.vacations) state.vacations = parsed.vacations;
-        if (parsed.overrides) state.overrides = parsed.overrides;
+      const saved = localStorage.getItem('turnos_app_data');
+      if (saved) {
+        const p = JSON.parse(saved);
+        if (p.profiles) state.profiles = p.profiles;
+        if (p.vacations) state.vacations = p.vacations;
+        if (p.overrides) state.overrides = p.overrides;
       }
-    } catch (e) {}
+    } catch(e) {}
 
-    let supabaseClient = null;
-
-    function parseDateUTC(dateStr) {
-      const [y, m, d] = dateStr.split('-').map(Number);
-      return Date.UTC(y, m - 1, d, 12, 0, 0);
-    }
-
-    function formatDateStr(y, mZero, d) {
-      return `${y}-${String(mZero + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    }
-
-    function formatHumanDate(dateStr) {
-      if (!dateStr) return '';
-      const [y, m, d] = dateStr.split('-').map(Number);
-      const shortM = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
-      return `${d} ${shortM[m - 1]} ${y}`;
-    }
-
-    // Cálculo exacto del ciclo 2-4 (2 noches trabajo, 4 libres)
-    function isBaseWorkNight(dateStr, cycleOffset = 0) {
-      const targetMs = parseDateUTC(dateStr);
-      const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
-      const cycleIndex = ((diffDays % 6) + 6) % 6;
-      return cycleIndex === 0 || cycleIndex === 1;
-    }
-
-    function getCycleDayNumber(dateStr, cycleOffset = 0) {
-      const targetMs = parseDateUTC(dateStr);
-      const diffDays = Math.round((targetMs - REFERENCE_UTC_MS) / MS_PER_DAY) - cycleOffset;
-      return (((diffDays % 6) + 6) % 6) + 1;
-    }
-
-    function getDatesInRange(startStr, endStr) {
-      const s = parseDateUTC(startStr);
-      const e = parseDateUTC(endStr);
-      if (e < s) return [];
-      const arr = [];
-      for (let ms = s; ms <= e; ms += MS_PER_DAY) {
-        const dt = new Date(ms);
-        arr.push(formatDateStr(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
-      }
-      return arr;
-    }
-
-    function getWorkerDayStatus(userId, dateStr) {
-      const profile = state.profiles[userId] || DEFAULT_PROFILES[userId];
-      const baseWorking = isBaseWorkNight(dateStr, profile.cycleOffset || 0);
-      const cycleDay = getCycleDayNumber(dateStr, profile.cycleOffset || 0);
-      const override = state.overrides.find(o => o.date === dateStr && o.userId === userId);
-      const userVacs = state.vacations.filter(v => v.userId === userId && dateStr >= v.startDate && dateStr <= v.endDate && v.status !== 'rechazada');
-      const approvedVacation = userVacs.find(v => v.status === 'aprobada');
-      const pendingVacation = userVacs.find(v => v.status === 'pendiente');
-
-      let effectiveWorking = baseWorking;
-      if (override) effectiveWorking = override.targetType === 'trabaja';
-      if (approvedVacation) effectiveWorking = false;
-
-      return { userId, baseWorking, effectiveWorking, cycleDay, override, approvedVacation, pendingVacation };
-    }
-
-    function saveLocalBackup() {
+    function save() {
       try {
-        localStorage.setItem('turnos_backup_state', JSON.stringify({
+        localStorage.setItem('turnos_app_data', JSON.stringify({
           profiles: state.profiles,
           vacations: state.vacations,
           overrides: state.overrides
         }));
-      } catch (e) {}
+      } catch(e) {}
     }
 
-    function showToast(msg, type = 'success') {
-      const container = document.getElementById('toast-container');
-      if (!container) return;
-      const colors = type === 'warning' ? 'border-amber-500 bg-amber-950/95 text-amber-200' : 'border-emerald-500 bg-slate-900/95 text-emerald-300';
-      container.innerHTML = `<div class="px-4 py-3 rounded-xl border shadow-2xl text-xs sm:text-sm font-semibold ${colors} transition-all">${msg}</div>`;
-      setTimeout(() => { container.innerHTML = ''; }, 3500);
+    function parseUTC(str) {
+      const [y, m, d] = str.split('-').map(Number);
+      return Date.UTC(y, m - 1, d, 12, 0, 0);
     }
 
-    async function initSupabase() {
-      if (!state.sbUrl || !state.sbKey || !window.supabase) {
-        state.sbConnected = false;
-        render();
-        return;
-      }
-      try {
-        supabaseClient = window.supabase.createClient(state.sbUrl, state.sbKey);
-        await fetchAllFromSupabase();
-        
-        supabaseClient.channel('public:all-tables')
-          .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-            fetchAllFromSupabase();
-          })
-          .subscribe();
-
-        state.sbConnected = true;
-        render();
-      } catch (err) {
-        console.error('Error Supabase:', err);
-        state.sbConnected = false;
-        render();
-      }
+    function fmtDate(y, m, d) {
+      return y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
     }
 
-    async function fetchAllFromSupabase() {
-      if (!supabaseClient || state.isSyncing) return;
-      try {
-        state.isSyncing = true;
-        
-        const { data: profs } = await supabaseClient.from('profiles').select('*');
-        if (profs && profs.length > 0) {
-          profs.forEach(p => {
-            state.profiles[p.id] = {
-              id: p.id,
-              name: p.name,
-              color: p.color || 'blue',
-              cycleOffset: Number(p.cycle_offset || 0),
-              canApproveVacations: Boolean(p.can_approve_vacations),
-              canEditOverrides: Boolean(p.can_edit_overrides)
-            };
-          });
-        }
-
-        const { data: vacs } = await supabaseClient.from('vacation_requests').select('*').order('created_at', { ascending: false });
-        if (vacs) {
-          state.vacations = vacs.map(v => ({
-            id: v.id,
-            userId: v.user_id,
-            startDate: v.start_date,
-            endDate: v.end_date,
-            type: v.type,
-            comment: v.comment || '',
-            status: v.status,
-            workNightsAffected: v.work_nights_affected || 0,
-            reviewedBy: v.reviewed_by
-          }));
-        }
-
-        const { data: ovrs } = await supabaseClient.from('shift_overrides').select('*').order('date', { ascending: false });
-        if (ovrs) {
-          state.overrides = ovrs.map(o => ({
-            id: o.id,
-            date: o.date,
-            userId: o.user_id,
-            targetType: o.target_type,
-            note: o.note || '',
-            createdBy: o.created_by,
-            createdAt: o.created_at
-          }));
-        }
-
-        saveLocalBackup();
-      } catch (err) {
-        console.error('Error sincronizando:', err);
-      } finally {
-        state.isSyncing = false;
-        render();
-      }
+    function isWorkNight(dateStr, offset = 0) {
+      const diff = Math.round((parseUTC(dateStr) - REF_UTC) / MS_DAY) - offset;
+      const idx = ((diff % 6) + 6) % 6;
+      return idx === 0 || idx === 1;
     }
 
-    window.setTab = (t) => { state.activeTab = t; render(); };
-    window.setActiveUser = (u) => { state.activeUser = u; state.ovrUser = u; render(); };
-    window.setFilterWorker = (w) => { state.filterWorker = w; render(); };
-    window.selectDate = (dStr) => { state.selectedDate = dStr; state.ovrDate = dStr; render(); };
+    function getStatus(uid, dateStr) {
+      const prof = state.profiles[uid];
+      const base = isWorkNight(dateStr, prof.offset);
+      const ovr = state.overrides.find(o => o.date === dateStr && o.userId === uid);
+      const vac = state.vacations.find(v => v.userId === uid && dateStr >= v.start && dateStr <= v.end && v.status !== 'rechazada');
+      
+      let working = base;
+      if (ovr) working = ovr.target === 'trabaja';
+      if (vac && vac.status === 'aprobada') working = false;
 
-    window.changeMonth = (delta) => {
-      state.currentMonth += delta;
-      if (state.currentMonth < 0) { state.currentMonth = 11; state.currentYear--; }
-      if (state.currentMonth > 11) { state.currentMonth = 0; state.currentYear++; }
+      return { working, ovr, vac };
+    }
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      const m = document.getElementById('toast-msg');
+      m.innerText = msg;
+      t.classList.remove('hidden');
+      setTimeout(() => t.classList.add('hidden'), 3000);
+    }
+
+    window.setTab = (t) => { state.tab = t; render(); };
+    window.setUser = (u) => { state.user = u; render(); };
+    window.setFilter = (f) => { state.filter = f; render(); };
+    window.selectDate = (d) => { state.selectedDate = d; render(); };
+    window.changeMonth = (d) => {
+      state.month += d;
+      if (state.month < 0) { state.month = 11; state.year--; }
+      if (state.month > 11) { state.month = 0; state.year++; }
       render();
     };
 
-    window.changeYear = (delta) => {
-      state.currentYear += delta;
-      render();
-    };
-
-    window.goToDate = (mode) => {
-      if (mode === 'ref') {
-        state.currentYear = 2026; state.currentMonth = 9; state.selectedDate = '2026-10-16';
-      } else {
-        const now = new Date();
-        state.currentYear = now.getFullYear();
-        state.currentMonth = now.getMonth();
-        state.selectedDate = formatDateStr(now.getFullYear(), now.getMonth(), now.getDate());
-      }
-      render();
-    };
-
-    window.submitVacation = async (e) => {
+    window.addVacation = (e) => {
       e.preventDefault();
-      const s = document.getElementById('vac-start').value;
-      const end = document.getElementById('vac-end').value;
-      const type = document.getElementById('vac-type').value;
-      const comment = document.getElementById('vac-comment').value.trim();
+      const start = document.getElementById('v-start').value;
+      const end = document.getElementById('v-end').value;
+      const type = document.getElementById('v-type').value;
+      const comment = document.getElementById('v-comm').value;
 
-      if (parseDateUTC(end) < parseDateUTC(s)) {
-        showToast('La fecha de fin no puede ser anterior al inicio', 'warning');
-        return;
-      }
-
-      const days = getDatesInRange(s, end);
-      let affected = 0;
-      days.forEach(d => { if (getWorkerDayStatus(state.activeUser, d).baseWorking) affected++; });
-
-      const newVacData = {
-        user_id: state.activeUser,
-        start_date: s,
-        end_date: end,
-        type: type,
-        comment: comment,
-        status: 'pendiente',
-        work_nights_affected: affected
-      };
-
-      if (supabaseClient && state.sbConnected) {
-        const { error } = await supabaseClient.from('vacation_requests').insert(newVacData);
-        if (error) {
-          showToast('Error al guardar en Supabase: ' + error.message, 'warning');
-          return;
-        }
-        await fetchAllFromSupabase();
-      } else {
-        state.vacations.unshift({
-          id: String(Date.now()),
-          userId: state.activeUser,
-          startDate: s,
-          endDate: end,
-          type,
-          comment,
-          status: 'pendiente',
-          workNightsAffected: affected
-        });
-        saveLocalBackup();
-        render();
-      }
-      showToast('Solicitud de permiso registrada correctamente');
+      state.vacations.unshift({
+        id: Date.now().toString(),
+        userId: state.user,
+        start, end, type, comment,
+        status: 'pendiente'
+      });
+      save();
+      render();
+      showToast('Solicitud enviada correctamente');
     };
 
-    window.reviewVacation = async (id, status) => {
-      if (!state.profiles[state.activeUser].canApproveVacations) {
-        showToast('Tu usuario no tiene permisos para aprobar vacaciones', 'warning');
-        return;
-      }
-      if (supabaseClient && state.sbConnected) {
-        const { error } = await supabaseClient.from('vacation_requests').update({ status, reviewed_by: state.activeUser }).eq('id', id);
-        if (error) {
-          showToast('Error al actualizar solicitud', 'warning');
-          return;
-        }
-        await fetchAllFromSupabase();
-      } else {
-        state.vacations = state.vacations.map(v => v.id === id ? { ...v, status, reviewedBy: state.activeUser } : v);
-        saveLocalBackup();
-        render();
-      }
-      showToast(`Solicitud ${status}`);
+    window.reviewVac = (id, status) => {
+      state.vacations = state.vacations.map(v => v.id === id ? { ...v, status } : v);
+      save();
+      render();
+      showToast('Solicitud ' + status);
     };
 
-    window.deleteVacation = async (id) => {
-      if (supabaseClient && state.sbConnected) {
-        await supabaseClient.from('vacation_requests').delete().eq('id', id);
-        await fetchAllFromSupabase();
-      } else {
-        state.vacations = state.vacations.filter(v => v.id !== id);
-        saveLocalBackup();
-        render();
-      }
+    window.deleteVac = (id) => {
+      state.vacations = state.vacations.filter(v => v.id !== id);
+      save();
+      render();
       showToast('Solicitud eliminada');
     };
 
-    window.submitOverride = async (e) => {
+    window.addOverride = (e) => {
       e.preventDefault();
-      const date = document.getElementById('ovr-date').value;
-      const userId = document.getElementById('ovr-user').value;
-      const targetType = document.getElementById('ovr-target').value;
-      const note = document.getElementById('ovr-note').value.trim() || 'Cambio puntual de turno';
+      const date = document.getElementById('o-date').value;
+      const userId = document.getElementById('o-user').value;
+      const target = document.getElementById('o-target').value;
+      const note = document.getElementById('o-note').value || 'Cambio puntual';
 
-      if (supabaseClient && state.sbConnected) {
-        await supabaseClient.from('shift_overrides').insert({
-          date,
-          user_id: userId,
-          target_type: targetType,
-          note,
-          created_by: state.activeUser
-        });
-        await fetchAllFromSupabase();
-      } else {
-        state.overrides = state.overrides.filter(o => !(o.date === date && o.userId === userId));
-        state.overrides.unshift({
-          id: String(Date.now()),
-          date,
-          userId,
-          targetType,
-          note,
-          createdBy: state.activeUser,
-          createdAt: new Date().toISOString()
-        });
-        saveLocalBackup();
-        render();
-      }
-      showToast('Cambio de turno registrado correctamente');
+      state.overrides = state.overrides.filter(o => !(o.date === date && o.userId === userId));
+      state.overrides.unshift({ id: Date.now().toString(), date, userId, target, note });
+      save();
+      render();
+      showToast('Cambio registrado');
     };
 
-    window.revertOverride = async (id) => {
-      if (supabaseClient && state.sbConnected) {
-        await supabaseClient.from('shift_overrides').delete().eq('id', id);
-        await fetchAllFromSupabase();
-      } else {
-        state.overrides = state.overrides.filter(o => o.id !== id);
-        saveLocalBackup();
-        render();
-      }
-      showToast('Turno original restaurado');
+    window.deleteOverride = (id) => {
+      state.overrides = state.overrides.filter(o => o.id !== id);
+      save();
+      render();
+      showToast('Cambio revertido');
     };
 
-    window.updateProfileField = async (uid, field, value) => {
-      state.profiles[uid][field] = value;
-      saveLocalBackup();
-      if (supabaseClient && state.sbConnected) {
-        const p = state.profiles[uid];
-        await supabaseClient.from('profiles').upsert({
-          id: uid,
-          name: p.name,
-          color: p.color,
-          cycle_offset: p.cycleOffset,
-          can_approve_vacations: p.canApproveVacations,
-          can_edit_overrides: p.canEditOverrides
-        });
-        await fetchAllFromSupabase();
-      } else {
-        render();
-      }
+    window.updateProfile = (uid, field, val) => {
+      state.profiles[uid][field] = val;
+      save();
+      render();
       showToast('Perfil actualizado');
     };
 
-    window.saveSupabaseCredentials = () => {
-      const u = document.getElementById('sb-url-input').value.trim();
-      const k = document.getElementById('sb-key-input').value.trim();
-      state.sbUrl = u;
-      state.sbKey = k;
-      try {
-        localStorage.setItem('turnos_sb_url', u);
-        localStorage.setItem('turnos_sb_key', k);
-      } catch (e) {}
-      initSupabase();
-      showToast('Conectando con Supabase...');
-    };
-
     function render() {
-      const activeP = state.profiles[state.activeUser];
-      const pendingCount = state.vacations.filter(v => v.status === 'pendiente').length;
+      const firstDay = new Date(Date.UTC(state.year, state.month, 1));
+      const startW = (firstDay.getUTCDay() + 6) % 7;
+      const totalDays = new Date(Date.UTC(state.year, state.month + 1, 0)).getUTCDate();
 
-      const firstDay = new Date(Date.UTC(state.currentYear, state.currentMonth, 1));
-      const startWeekday = (firstDay.getUTCDay() + 6) % 7;
-      const daysInMonth = new Date(Date.UTC(state.currentYear, state.currentMonth + 1, 0)).getUTCDate();
-
-      let calendarCellsHtml = '';
-      for (let i = 0; i < startWeekday; i++) {
-        calendarCellsHtml += `<div class="h-20 sm:h-24 rounded-xl bg-slate-950/30 border border-slate-900/40"></div>`;
+      let grid = '';
+      for (let i = 0; i < startW; i++) {
+        grid += '<div class="h-20 bg-slate-950/20 rounded-xl border border-slate-900"></div>';
       }
 
-      const workersToRender = state.filterWorker === 'all' ? ['user1', 'user2', 'user3'] : [state.filterWorker];
+      const activeWorkers = state.filter === 'all' ? ['user1', 'user2', 'user3'] : [state.filter];
 
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dStr = formatDateStr(state.currentYear, state.currentMonth, d);
+      for (let d = 1; d <= totalDays; d++) {
+        const dStr = fmtDate(state.year, state.month, d);
         const isSel = state.selectedDate === dStr;
         const isRef = dStr === '2026-10-16';
 
-        let badgesHtml = '';
-        workersToRender.forEach(uid => {
-          const st = getWorkerDayStatus(uid, dStr);
-          const p = state.profiles[uid];
-          const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
+        let badges = '';
+        activeWorkers.forEach(uid => {
+          const st = getStatus(uid, dStr);
+          const prof = state.profiles[uid];
+          const bg = prof.color === 'blue' ? 'bg-blue-600' : prof.color === 'green' ? 'bg-emerald-600' : 'bg-amber-500 text-slate-950';
 
-          if (st.approvedVacation) {
-            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between border border-dashed ${t.badge}"><span>${p.name}</span><span>🏖️</span></div>`;
-          } else if (st.pendingVacation) {
-            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-medium truncate flex items-center justify-between bg-amber-500/15 text-amber-300 border border-dotted border-amber-400"><span>${p.name}?</span><span>⏳</span></div>`;
-          } else if (st.effectiveWorking) {
-            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] sm:text-[10px] font-semibold truncate flex items-center justify-between text-white ${t.bg} ${st.override ? 'ring-1 ring-amber-300' : ''}"><span>${p.name}</span><span>${st.override ? '⇄' : '🌙'}</span></div>`;
-          } else if (st.override) {
-            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] text-amber-300 bg-slate-800 border border-amber-400/40 truncate flex justify-between"><span class="line-through">${p.name}</span><span>LIB</span></div>`;
-          } else if (state.filterWorker !== 'all') {
-            badgesHtml += `<div class="w-full px-1 py-0.5 rounded text-[9px] text-slate-400 bg-slate-900 flex justify-between"><span>Libre</span><span>☀️</span></div>`;
+          if (st.vac && st.vac.status === 'aprobada') {
+            badges += '<div class="px-1 rounded text-[9px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 truncate">🏖️ ' + prof.name + '</div>';
+          } else if (st.vac && st.vac.status === 'pendiente') {
+            badges += '<div class="px-1 rounded text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/40 truncate">⏳ ' + prof.name + '</div>';
+          } else if (st.working) {
+            badges += '<div class="px-1 rounded text-[9px] font-bold text-white truncate ' + bg + '">🌙 ' + prof.name + '</div>';
           }
         });
 
-        calendarCellsHtml += `
-          <button onclick="selectDate('${dStr}')" class="h-20 sm:h-24 rounded-xl p-1 sm:p-1.5 flex flex-col justify-between text-left transition border overflow-hidden ${isSel ? 'bg-slate-800/90 border-blue-400 ring-2 ring-blue-500/40' : 'bg-slate-950/60 hover:bg-slate-900 border-slate-800/80'}">
+        grid += `
+          <button onclick="selectDate('${dStr}')" class="h-20 p-1 rounded-xl border flex flex-col justify-between text-left transition ${isSel ? 'bg-slate-800 border-blue-400 ring-2 ring-blue-500/30' : 'bg-slate-950/60 border-slate-800 hover:bg-slate-900'}">
             <div class="flex items-center justify-between w-full">
-              <span class="text-xs sm:text-sm font-bold ${isSel ? 'text-white' : 'text-slate-300'}">${d}</span>
+              <span class="text-xs font-bold ${isSel ? 'text-white' : 'text-slate-300'}">${d}</span>
               ${isRef ? '<span class="text-[8px] px-1 rounded bg-blue-500/30 text-blue-300 font-bold">Ref</span>' : ''}
             </div>
-            <div class="space-y-0.5 w-full">${badgesHtml}</div>
+            <div class="space-y-0.5 w-full">${badges}</div>
           </button>
         `;
       }
 
-      let detailCardsHtml = '';
-      ['user1', 'user2', 'user3'].forEach(uid => {
-        const p = state.profiles[uid];
-        const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
-        const st = getWorkerDayStatus(uid, state.selectedDate);
-        detailCardsHtml += `
-          <div class="p-3 rounded-xl border ${st.eff
+      let content = '';
+      if (state.tab === 'cal') {
+        let details = '';
+        ['user1', 'user2', 'user3'].forEach(uid => {
+          const prof = state.profiles[uid];
+          const st = getStatus(uid, state.selectedDate);
+          const col = prof.color === 'blue' ? 'bg-blue-500/15 border-blue-500/40' : prof.color === 'green' ? 'bg-emerald-500/15 border-emerald-500/40' : 'bg-amber-500/15 border-amber-500/40';
+          const dot = prof.color === 'blue' ? 'bg-blue-500' : prof.color === 'green' ? 'bg-emerald-500' : 'bg-amber-500';
+
+          details += `
+            <div class="p-3 rounded-xl border ${st.working ? col : 'bg-slate-950/60 border-slate-800'}">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="w-2.5 h-2.5 rounded-full ${dot}"></span>
+                  <span class="font-bold text-sm text-white">${prof.name}</span>
+                </div>
+              </div>
+              <div class="mt-1.5 text-xs">
+                ${st.vac && st.vac.status === 'aprobada' ? '🏖️ De Vacaciones' : st.working ? '🌙 <strong>TRABAJA ESTA NOCHE</strong>' : '☀️ Noche Libre'}
+                ${st.ovr ? `<button onclick="deleteOverride('${st.ovr.id}')" class="ml-2 px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px]">Revertir cambio</button>` : ''}
+              </div>
+            </div>
+          `;
+        });
+
+        content = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <div class="lg:col-span-8 bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
+              <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                  <button onclick="changeMonth(-1)" class="px-3 py-1.5 bg-slate-800 rounded-xl font-bold">←</button>
+                  <h2 class="text-base font-bold min-w-[130px] text-center">${MONTHS[state.month]} ${state.year}</h2>
+                  <button onclick="changeMonth(1)" class="px-3 py-1.5 bg-slate-800 rounded-xl font-bold">→</button>
+                </div>
+                <div class="flex gap-1">
+                  <button onclick="state.month=9;state.year=2026;state.selectedDate='2026-10-16';render();" class="px-2 py-1.5 bg-blue-500/20 text-blue-300 rounded-lg text-xs font-bold">16 Oct 26</button>
+                </div>
+              </div>
+
+              <div class="flex gap-1 py-3">
+                <button onclick="setFilter('all')" class="px-2.5 py-1 rounded-lg text-xs font-semibold ${state.filter==='all' ? 'bg-white text-slate-900' : 'bg-slate-800 text-slate-400'}">Ver los 3</button>
+                ${['user1','user2','user3'].map(u => `<button onclick="setFilter('${u}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold ${state.filter===u ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}">${state.profiles[u].name}</button>`).join('')}
+              </div>
+
+              <div class="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-slate-400 mb-1">
+                ${WEEKDAYS.map(w => `<div>${w}</div>`).join('')}
+              </div>
+              <div class="grid grid-cols-7 gap-1">${grid}</div>
+            </div>
+
+            <div class="lg:col-span-4 space-y-4">
+              <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+                <div class="border-b border-slate-800 pb-2">
+                  <span class="text-[11px] text-blue-400 font-bold uppercase">Detalle de la noche</span>
+                  <h3 class="text-base font-bold">${state.selectedDate}</h3>
+                </div>
+                <div class="space-y-2">${details}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      } else if (state.tab === 'vac') {
+        let list = state.vacations.length === 0 
+          ? '<p class="text-center text-xs text-slate-400 py-6">No hay solicitudes registradas.</p>'
+          : state.vacations.map(v => `
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
+              <div>
+                <span class="px-2 py-0.5 rounded bg-blue-500/20 text-blue-300 text-xs font-bold">${state.profiles[v.userId].name}</span>
+                <span class="text-xs font-bold ml-1">${v.start} → ${v.end}</span>
+                <p class="text-[11px] text-slate-400 mt-1">${v.type} ${v.comment ? '· "' + v.comment + '"' : ''}</p>
+              </div>
+              <div class="flex items-center gap-1">
+                <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase ${v.status==='aprobada'?'bg-emerald-500/20 text-emerald-300':v.status==='rechazada'?'bg-rose-500/20 text-rose-300':'bg-amber-500/20 text-amber-300'}">${v.status}</span>
+                <button onclick="reviewVac('${v.id}','aprobada')" class="px-2 py-1 bg-emerald-600 text-white text-xs font-bold rounded">Aprobar</button>
+                <button onclick="reviewVac('${v.id}','rechazada')" class="px-2 py-1 bg-rose-600 text-white text-xs font-bold rounded">Rechazar</button>
+                <button onclick="deleteVac('${v.id}')" class="px-2 py-1 bg-slate-800 text-slate-400 text-xs rounded">Borrar</button>
+              </div>
+            </div>
+          `).join('');
+
+        content = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <form onsubmit="addVacation(event)" class="lg:col-span-5 bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3 h-fit">
+              <h2 class="text-base font-bold">Pedir Vacaciones</h2>
+              <div><label class="text-xs text-slate-400">Inicio</label><input id="v-start" type="date" value="2026-10-22" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <div><label class="text-xs text-slate-400">Fin</label><input id="v-end" type="date" value="2026-10-25" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <div>
+                <label class="text-xs text-slate-400">Tipo</label>
+                <select id="v-type" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">
+                  <option value="vacaciones">Vacaciones</option>
+                  <option value="asuntos_propios">Asuntos Propios</option>
+                </select>
+              </div>
+              <div><label class="text-xs text-slate-400">Comentario</label><input id="v-comm" type="text" placeholder="Nota..." class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-blue-600 font-bold text-xs text-white">Enviar Solicitud</button>
+            </form>
+            <div class="lg:col-span-7 bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <h2 class="text-base font-bold">Solicitudes del Equipo</h2>
+              <div class="space-y-2">${list}</div>
+            </div>
+          </div>
+        `;
+      } else if (state.tab === 'ovr') {
+        let ovrList = state.overrides.length === 0
+          ? '<p class="text-center text-xs text-slate-400 py-6">No hay cambios puntuales.</p>'
+          : state.overrides.map(o => `
+            <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
+              <div>
+                <span class="text-xs font-bold">${o.date}</span> · <span class="text-blue-300 font-bold">${state.profiles[o.userId].name}</span> → <span class="text-amber-300 font-bold">${o.target.toUpperCase()}</span>
+                <p class="text-[11px] text-slate-400">${o.note}</p>
+              </div>
+              <button onclick="deleteOverride('${o.id}')" class="px-2 py-1 bg-slate-800 text-amber-300 text-xs font-bold rounded">Revertir</button>
+            </div>
+          `).join('');
+
+        content = `
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+            <form onsubmit="addOverride(event)" class="lg:col-span-5 bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3 h-fit">
+              <h2 class="text-base font-bold">Cambio Puntual de Turno</h2>
+              <div><label class="text-xs text-slate-400">Fecha</label><input id="o-date" type="date" value="2026-10-16" required class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <div><label class="text-xs text-slate-400">Trabajador</label><select id="o-user" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">${['user1','user2','user3'].map(u=>`<option value="${u}">${state.profiles[u].name}</option>`).join('')}</select></div>
+              <div><label class="text-xs text-slate-400">Estado</label><select id="o-target" class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white"><option value="trabaja">Pasa a Trabaja</option><option value="libre">Pasa a Libra</option></select></div>
+              <div><label class="text-xs text-slate-400">Nota</label><input id="o-note" type="text" placeholder="Motivo..." class="w-full p-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white" /></div>
+              <button type="submit" class="w-full py-2.5 rounded-xl bg-amber-500 font-bold text-xs text-slate-950">Guardar Cambio</button>
+            </form>
+            <div class="lg:col-span-7 bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-3">
+              <h2 class="text-base font-bold">Historial de Cambios</h2>
+              <div class="space-y-2">${ovrList}</div>
+            </div>
+          </div>
+        `;
+      } else if (state.tab === 'cfg') {
+        content = `
+          <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 space-y-4">
+            <h2 class="text-base font-bold">Configuración de Santos, Guerrero y Sergio</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              ${['user1','user2','user3'].map(uid => `
+                <div class="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                  <label class="text-xs text-slate-400">Nombre</label>
+                  <input type="text" value="${state.profiles[uid].name}" onchange="updateProfile('${uid}','name',this.value)" class="w-full p-2 rounded bg-slate-900 text-xs text-white font-bold" />
+                  <label class="text-xs text-slate-400">Desfase del ciclo (días)</label>
+                  <input type="number" value="${state.profiles[uid].offset}" onchange="updateProfile('${uid}','offset',Number(this.value))" class="w-full p-2 rounded bg-slate-900 text-xs text-white" />
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      document.getElementById('app').innerHTML = `
+        <header class="sticky top-0 z-30 bg-[#090d16]/95 border-b border-slate-800 px-4 py-3">
+          <div class="max-w-5xl mx-auto flex items-center justify-between">
+            <h1 class="text-base font-bold">🌙 Turnos 2-4</h1>
+            <div class="flex gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800">
+              ${['user1','user2','user3'].map(u=>`<button onclick="setUser('${u}')" class="px-2.5 py-1 rounded-lg text-xs font-bold ${state.user===u?'bg-blue-600 text-white':'text-slate-400'}">${state.profiles[u].name}</button>`).join('')}
+            </div>
+          </div>
+        </header>
+        <main class="max-w-5xl mx-auto px-4 py-4">${content}</main>
+        <nav class="fixed bottom-0 left-0 right-0 bg-[#090d16]/95 border-t border-slate-800 px-2 py-2">
+          <div class="grid grid-cols-4 max-w-md mx-auto text-center">
+            <button onclick="setTab('cal')" class="${state.tab==='cal'?'text-blue-400 font-bold':'text-slate-400'} text-xs">📅 Turnos</button>
+            <button onclick
