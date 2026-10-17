@@ -168,7 +168,6 @@ html
         supabaseClient = window.supabase.createClient(state.sbUrl, state.sbKey);
         await fetchAllFromSupabase();
         
-        // Suscripción en tiempo real limpia y sin bloqueos
         supabaseClient.channel('public:all-tables')
           .on('postgres_changes', { event: '*', schema: 'public' }, () => {
             fetchAllFromSupabase();
@@ -189,7 +188,6 @@ html
       try {
         state.isSyncing = true;
         
-        // Cargar perfiles
         const { data: profs } = await supabaseClient.from('profiles').select('*');
         if (profs && profs.length > 0) {
           profs.forEach(p => {
@@ -204,7 +202,6 @@ html
           });
         }
 
-        // Cargar solicitudes de vacaciones (tabla vacation_requests)
         const { data: vacs } = await supabaseClient.from('vacation_requests').select('*').order('created_at', { ascending: false });
         if (vacs) {
           state.vacations = vacs.map(v => ({
@@ -220,7 +217,6 @@ html
           }));
         }
 
-        // Cargar cambios excepcionales de turno
         const { data: ovrs } = await supabaseClient.from('shift_overrides').select('*').order('date', { ascending: false });
         if (ovrs) {
           state.overrides = ovrs.map(o => ({
@@ -488,4 +484,7 @@ html
         const t = COLOR_THEMES[p.color] || COLOR_THEMES.blue;
         const st = getWorkerDayStatus(uid, state.selectedDate);
         detailCardsHtml += `
-          <div class="p-3 rounded-xl border ${st.effecti
+          <div class="p-3 rounded-xl border ${st.effectiveWorking ? `${t.soft} ${t.border}` : 'bg-slate-950/60 border-slate-800'}">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <s
